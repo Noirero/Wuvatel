@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Manga Translator M1
+    name: Build Wuvatel M1
     runs-on: ubuntu-latest
 
     steps:
@@ -24,6 +24,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK 37
         shell: bash
@@ -40,12 +43,12 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk MangaTranslator-M1-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M1-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: MangaTranslator-M1-debug.apk
-          path: MangaTranslator-M1-debug.apk
+          name: Wuvatel-M1-debug.apk
+          path: Wuvatel-M1-debug.apk
           if-no-files-found: error
           archive: false
