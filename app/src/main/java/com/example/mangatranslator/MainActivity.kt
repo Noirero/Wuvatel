@@ -117,7 +117,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.1", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2.2", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(

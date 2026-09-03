@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M2.1
+    name: Build Wuvatel M2.2
     runs-on: ubuntu-latest
 
     steps:
@@ -39,9 +39,6 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      # GitHub-hosted runners are disposable. Preserve the debug keystore so
-      # every beta APK is signed by the same key and can update the previous
-      # beta installation instead of conflicting with it.
       - name: Restore Wuvatel debug signing key
         uses: actions/cache@v4
         with:
@@ -52,12 +49,12 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M2.1-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M2.2-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M2.1-debug.apk
-          path: Wuvatel-M2.1-debug.apk
+          name: Wuvatel-M2.2-debug.apk
+          path: Wuvatel-M2.2-debug.apk
           if-no-files-found: error
           archive: false

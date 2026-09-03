@@ -21,9 +21,6 @@ class JapaneseOcrEngine {
         val input = InputImage.fromBitmap(bitmap, 0)
         val result = recognizer.process(input).await()
 
-        // M2 keeps ML Kit text blocks as the base dialogue group instead of
-        // exposing every detected line as a separate region. Inside a block,
-        // vertical Japanese columns are read right-to-left.
         val baseCandidates = result.textBlocks.mapNotNull blockLoop@ { block ->
             val lines = block.lines.mapNotNull lineLoop@ { line ->
                 val box = line.boundingBox ?: return@lineLoop null
@@ -36,9 +33,9 @@ class JapaneseOcrEngine {
             buildCandidate(lines)
         }
 
-        // M2.1: ML Kit can split neighbouring vertical columns from the same
-        // speech bubble into separate TextBlocks. Merge only conservative,
-        // spatially-close vertical neighbours before the final reading order.
+        // M2.2: keep M2.1's useful inter-block merge, but prevent chain-merging
+        // across separate bubbles. Every new block must still align with the
+        // original anchor and keep the whole group's geometry compact.
         val groupedRegions = mergeNearbyVerticalBlocks(
             candidates = baseCandidates,
             imageWidth = bitmap.width,
@@ -73,9 +70,6 @@ class JapaneseOcrEngine {
         val bounds = Rect(orderedLines.first().boundingBox)
         orderedLines.drop(1).forEach { line -> bounds.union(line.boundingBox) }
 
-        // Japanese vertical columns form one continuous sentence. Horizontal
-        // lines keep their line break so later translation/typesetting can
-        // preserve the original layout hint.
         val separator = if (isVertical) "" else "\n"
         val text = orderedLines.joinToString(separator = separator) { it.text }
 
@@ -116,13 +110,16 @@ class JapaneseOcrEngine {
             val group = mutableListOf(seed)
             used[seedIndex] = true
 
-            while (true) {
+            while (group.size < MAX_BLOCKS_PER_GROUP) {
                 val groupBounds = unionBounds(group.map { it.boundingBox })
                 val bestNeighbour = ordered.indices
                     .asSequence()
                     .filter { index -> !used[index] && ordered[index].isVertical }
                     .mapNotNull { index ->
                         val candidate = ordered[index]
+
+                        // Candidate must be adjacent to at least one current
+                        // member, preserving the good M2.1 multi-column merge.
                         val pairGap = group
                             .mapNotNull { member ->
                                 if (shouldMergeVerticalPair(member, candidate, imageWidth)) {
@@ -137,7 +134,18 @@ class JapaneseOcrEngine {
                         val combinedBounds = Rect(groupBounds).apply {
                             union(candidate.boundingBox)
                         }
-                        if (combinedBounds.width() > maxGroupWidth) {
+
+                        // Unlike M2.1, proximity to any member is not enough:
+                        // the new block must remain aligned with the seed and
+                        // must not stretch the overall group into another bubble.
+                        if (!shouldJoinVerticalGroup(
+                                anchor = seed,
+                                group = group,
+                                candidate = candidate,
+                                combinedBounds = combinedBounds,
+                                maxGroupWidth = maxGroupWidth,
+                            )
+                        ) {
                             return@mapNotNull null
                         }
 
@@ -157,6 +165,38 @@ class JapaneseOcrEngine {
         return output
     }
 
+    private fun shouldJoinVerticalGroup(
+        anchor: OcrCandidate,
+        group: List<OcrCandidate>,
+        candidate: OcrCandidate,
+        combinedBounds: Rect,
+        maxGroupWidth: Int,
+    ): Boolean {
+        if (combinedBounds.width() > maxGroupWidth) return false
+
+        val anchorBox = anchor.boundingBox
+        val candidateBox = candidate.boundingBox
+        val anchorOverlap = verticalOverlapRatio(anchorBox, candidateBox)
+        if (anchorOverlap < MIN_ANCHOR_VERTICAL_OVERLAP_RATIO) return false
+
+        val anchorCenterDistance = abs(anchorBox.centerY() - candidateBox.centerY())
+        val anchorHeight = anchorBox.height().coerceAtLeast(1)
+        val candidateHeight = candidateBox.height().coerceAtLeast(1)
+        val allowedCenterDistance = (
+            max(anchorHeight, candidateHeight) * MAX_ANCHOR_CENTER_DISTANCE_RATIO
+        ).toInt()
+        if (anchorCenterDistance > allowedCenterDistance) return false
+
+        val tallestMember = max(
+            candidateHeight,
+            group.maxOf { it.boundingBox.height().coerceAtLeast(1) },
+        )
+        val maxGroupHeight = (tallestMember * MAX_GROUP_HEIGHT_MULTIPLIER).toInt()
+        if (combinedBounds.height() > maxGroupHeight) return false
+
+        return true
+    }
+
     private fun shouldMergeVerticalPair(
         first: OcrCandidate,
         second: OcrCandidate,
@@ -166,20 +206,17 @@ class JapaneseOcrEngine {
 
         val firstBox = first.boundingBox
         val secondBox = second.boundingBox
-        val overlap = min(firstBox.bottom, secondBox.bottom) - max(firstBox.top, secondBox.top)
-        if (overlap <= 0) return false
-
-        val smallerHeight = min(firstBox.height(), secondBox.height()).coerceAtLeast(1)
-        val overlapRatio = overlap.toFloat() / smallerHeight
-        if (overlapRatio < MIN_BLOCK_VERTICAL_OVERLAP_RATIO) return false
+        if (verticalOverlapRatio(firstBox, secondBox) < MIN_BLOCK_VERTICAL_OVERLAP_RATIO) {
+            return false
+        }
 
         val firstWidth = firstBox.width().coerceAtLeast(1)
         val secondWidth = secondBox.width().coerceAtLeast(1)
         val smallerWidth = min(firstWidth, secondWidth)
         val centerDistanceX = abs(firstBox.centerX() - secondBox.centerX())
 
-        // Avoid treating overlapping detections from essentially the same
-        // column as separate manga columns.
+        // Avoid treating duplicate/overlapping detections from essentially the
+        // same column as two neighbouring manga columns.
         if (centerDistanceX < smallerWidth * MIN_COLUMN_CENTER_DISTANCE_RATIO) {
             return false
         }
@@ -192,6 +229,14 @@ class JapaneseOcrEngine {
         )
 
         return horizontalGap(firstBox, secondBox) <= allowedGap
+    }
+
+    private fun verticalOverlapRatio(first: Rect, second: Rect): Float {
+        val overlap = min(first.bottom, second.bottom) - max(first.top, second.top)
+        if (overlap <= 0) return 0f
+
+        val smallerHeight = min(first.height(), second.height()).coerceAtLeast(1)
+        return overlap.toFloat() / smallerHeight
     }
 
     private fun mergeCandidateGroup(group: List<OcrCandidate>): OcrCandidate {
@@ -315,11 +360,15 @@ class JapaneseOcrEngine {
         const val MIN_VERTICAL_OVERLAP_RATIO = 0.35f
 
         const val MIN_BLOCK_VERTICAL_OVERLAP_RATIO = 0.45f
+        const val MIN_ANCHOR_VERTICAL_OVERLAP_RATIO = 0.30f
+        const val MAX_ANCHOR_CENTER_DISTANCE_RATIO = 0.70f
+        const val MAX_GROUP_HEIGHT_MULTIPLIER = 1.35f
         const val MAX_COLUMN_GAP_WIDTH_MULTIPLIER = 1.8f
-        const val MAX_COLUMN_GAP_IMAGE_RATIO = 0.04f
-        const val MIN_BLOCK_GAP_PX = 10
+        const val MAX_COLUMN_GAP_IMAGE_RATIO = 0.035f
+        const val MIN_BLOCK_GAP_PX = 8
         const val MIN_COLUMN_CENTER_DISTANCE_RATIO = 0.55f
-        const val MAX_GROUP_WIDTH_RATIO = 0.24f
-        const val MIN_GROUP_WIDTH_PX = 96
+        const val MAX_GROUP_WIDTH_RATIO = 0.18f
+        const val MIN_GROUP_WIDTH_PX = 72
+        const val MAX_BLOCKS_PER_GROUP = 5
     }
 }
