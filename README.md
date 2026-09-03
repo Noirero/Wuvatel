@@ -1,14 +1,21 @@
-# Wuvatel — M1
+# Wuvatel — M2
 
-Starter Android untuk fondasi aplikasi penerjemah manga mandiri.
+Aplikasi Android mandiri untuk OCR dan penerjemahan manga. Pengembangan aktif berada di branch `beta`.
 
-## Target M1
+## Status
 
-1. Pilih satu gambar manga (JPG/PNG/WebP).
-2. Tampilkan gambar tanpa mengubah file asli.
-3. Jalankan OCR Jepang secara on-device dengan ML Kit Japanese Text Recognition.
-4. Tampilkan bounding box di atas region teks yang ditemukan.
-5. Tampilkan hasil teks OCR di bawah gambar.
+M1 sudah lolos uji di perangkat Android: pemilih gambar, preview, OCR Jepang on-device, bounding box, dan daftar hasil OCR bekerja.
+
+## Target M2
+
+1. Gunakan ML Kit `TextBlock` sebagai kelompok teks dasar, bukan setiap line sebagai region terpisah.
+2. Deteksi kelompok yang dominan vertikal dari bentuk bounding box line.
+3. Susun kolom Jepang vertikal dari kanan ke kiri.
+4. Gabungkan bounding box semua line dalam kelompok.
+5. Urutkan kelompok halaman dari atas ke bawah dan kanan ke kiri dalam baris yang sama.
+6. Pertahankan file manga asli tanpa perubahan.
+
+M2 masih berupa pengelompokan OCR berbasis layout. Deteksi bentuk balon manga sebenarnya belum ditambahkan, jadi satu `TextBlock` belum dijamin selalu sama dengan satu balon pada semua halaman.
 
 Belum ada translation, image cleaning, typesetting, ZIP/CBZ, atau AI pada milestone ini.
 
@@ -23,11 +30,9 @@ Belum ada translation, image cleaning, typesetting, ZIP/CBZ, atau AI pada milest
 
 ## Build tanpa Android Studio
 
-Project ini menyertakan GitHub Actions di:
+Project menyertakan GitHub Actions di `.github/workflows/build-apk.yml`.
 
-`.github/workflows/build-apk.yml`
-
-Artinya APK debug dapat dibuat di server GitHub dan hasilnya diunduh dari HP. Petunjuk lengkap ada di `BUILD_FROM_PHONE.md`.
+APK M2 hasil build bernama `Wuvatel-M2-debug.apk` dan dapat diunduh dari halaman Actions melalui HP.
 
 ## Struktur utama
 
@@ -35,7 +40,6 @@ Artinya APK debug dapat dibuat di server GitHub dan hasilnya diunduh dari HP. Pe
 - `app/src/main/java/com/example/mangatranslator/ocr/JapaneseOcrEngine.kt`
 - `app/src/main/java/com/example/mangatranslator/ocr/TextRegion.kt`
 - `.github/workflows/build-apk.yml`
-- `M1_ACCEPTANCE.md`
 
 ## Branch
 
@@ -46,4 +50,4 @@ Artinya APK debug dapat dibuat di server GitHub dan hasilnya diunduh dari HP. Pe
 
 - File manga asli tidak ditimpa.
 - OCR dibuat modular.
-- Fokus M1 hanya satu gambar + OCR + bounding box.
+- Satu milestone diuji sebelum melanjutkan ke milestone berikutnya.
