@@ -39,6 +39,15 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      # GitHub-hosted runners are disposable. Preserve the debug keystore so
+      # every beta APK is signed by the same key and can update the previous
+      # beta installation instead of conflicting with it.
+      - name: Restore Wuvatel debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: wuvatel-beta-debug-keystore-v1
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
