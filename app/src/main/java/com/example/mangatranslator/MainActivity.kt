@@ -117,7 +117,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M1", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -150,7 +150,7 @@ private fun LoadingState() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator()
-            Text("Mendeteksi teks Jepang…")
+            Text("Mengelompokkan teks manga Jepang…")
         }
     }
 }
@@ -178,7 +178,7 @@ private fun ResultState(state: OcrUiState.Ready) {
                 .height(420.dp),
         )
 
-        Text("Terdeteksi: ${state.regions.size} region")
+        Text("Terdeteksi: ${state.regions.size} kelompok teks")
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
         if (state.regions.isEmpty()) {

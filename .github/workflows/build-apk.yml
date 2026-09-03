@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M1
+    name: Build Wuvatel M2
     runs-on: ubuntu-latest
 
     steps:
@@ -43,12 +43,12 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M1-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M2-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M1-debug.apk
-          path: Wuvatel-M1-debug.apk
+          name: Wuvatel-M2-debug.apk
+          path: Wuvatel-M2-debug.apk
           if-no-files-found: error
           archive: false
