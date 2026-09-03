@@ -10,7 +10,7 @@ Project ini disiapkan supaya APK dapat dibuat oleh GitHub Actions. HP hanya dipa
 4. Pilih workflow **Build Debug APK**.
 5. Tekan **Run workflow** jika build belum berjalan otomatis.
 6. Setelah build berstatus hijau, buka hasil run tersebut.
-7. Di bagian **Artifacts**, unduh `MangaTranslator-M1-debug.apk`.
+7. Di bagian **Artifacts**, unduh `Wuvatel-M1-debug.apk`.
 8. Instal APK di HP dan uji OCR dengan satu halaman manga Jepang.
 
 Workflow juga berjalan otomatis setiap ada perubahan yang di-push ke branch `main` atau `beta`.
