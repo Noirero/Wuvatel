@@ -17,7 +17,7 @@ Belum ada translation, image cleaning, typesetting, ZIP/CBZ, atau AI pada milest
 - Kotlin
 - Jetpack Compose
 - Android minSdk 23
-- compileSdk/targetSdk 37
+- compileSdk/targetSdk 36
 - ML Kit Japanese OCR bundled
 - Storage Access Framework (`OpenDocument`)
 

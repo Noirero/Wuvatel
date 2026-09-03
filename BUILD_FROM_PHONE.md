@@ -18,7 +18,7 @@ Workflow juga berjalan otomatis setiap ada perubahan yang di-push ke branch `mai
 ## Yang dikerjakan GitHub
 
 - JDK 17
-- Android SDK API 37
+- Android SDK API 36
 - Android SDK Build Tools 36.0.0
 - Gradle 9.6.0
 - `:app:assembleDebug`
