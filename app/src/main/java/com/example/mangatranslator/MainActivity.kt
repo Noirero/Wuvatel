@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -165,32 +164,28 @@ private fun ErrorState(message: String) {
 
 @Composable
 private fun ResultState(state: OcrUiState.Ready) {
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         MangaImageWithBoxes(
             bitmap = state.bitmap,
             regions = state.regions,
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .height(420.dp),
         )
 
-        Spacer(Modifier.height(8.dp))
         Text("Terdeteksi: ${state.regions.size} region")
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.55f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (state.regions.isEmpty()) {
-                Text("Belum ada teks yang terdeteksi pada gambar ini.")
-            } else {
-                state.regions.forEachIndexed { index, region ->
-                    Text("${index + 1}. ${region.text}")
-                }
+        if (state.regions.isEmpty()) {
+            Text("Belum ada teks yang terdeteksi pada gambar ini.")
+        } else {
+            state.regions.forEachIndexed { index, region ->
+                Text("${index + 1}. ${region.text}")
             }
         }
     }
