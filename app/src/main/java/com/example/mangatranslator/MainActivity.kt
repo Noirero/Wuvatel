@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.10", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.11", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -311,6 +311,7 @@ private fun ResultState(
 
     val missingTranslations = regions.count { it.translation.isNullOrBlank() }
     val prepareReady = diagnosticLog.any { it.contains("[PREPARE-DONE]") }
+    val cacheReady = diagnosticLog.any { it.contains("[CACHE-PROBE-DONE]") || it.contains("[CACHE-PROBE-FINAL-DONE]") }
     val modelsReady = diagnosticLog.any { it.contains("[READY]") }
     val translationFinished = diagnosticLog.any { it.contains("[UI] Semua region yang kosong selesai diterjemahkan") }
 
@@ -343,8 +344,8 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.1.10 · translator-owned cache")
-                    translationStatus = "Menyiapkan model translator…"
+                    appendDiagnostic("[UI] Mulai sesi M3.1.11 · direct cache probe")
+                    translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
                         translator.ensureModel(
@@ -417,8 +418,11 @@ private fun ResultState(
         if (diagnosticLog.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text("Status teknis", style = MaterialTheme.typography.titleSmall)
+            if (cacheReady) {
+                Text("Cache translator: terverifikasi", style = MaterialTheme.typography.bodySmall)
+            }
             if (prepareReady) {
-                Text("Jaringan: tidak diprobe Wuvatel", style = MaterialTheme.typography.bodySmall)
+                Text("Model: prepare/download selesai", style = MaterialTheme.typography.bodySmall)
             }
             if (modelsReady) {
                 Text("Model JP → ID: siap", style = MaterialTheme.typography.bodySmall)
@@ -426,7 +430,7 @@ private fun ResultState(
             if (translationFinished) {
                 Text("Proses: selesai", style = MaterialTheme.typography.bodySmall)
             }
-            if (!prepareReady && !modelsReady && !translationFinished && translationBusy) {
+            if (!prepareReady && !cacheReady && !modelsReady && !translationFinished && translationBusy) {
                 Text("Pemeriksaan sedang berjalan…", style = MaterialTheme.typography.bodySmall)
             }
 
@@ -439,7 +443,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.1.10 diagnostic log",
+                                "Wuvatel M3.1.11 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )

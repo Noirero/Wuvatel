@@ -1,4 +1,4 @@
-# M3.1.10 translator-owned cache with permanent signing verification
+# M3.1.11 direct cache probe with permanent signing verification
 name: Build Debug APK
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M3.1.10 translator-owned cache
+    name: Build Wuvatel M3.1.11 direct cache probe
     runs-on: ubuntu-latest
 
     steps:
@@ -102,12 +102,12 @@ jobs:
           fi
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.10-translator-cache-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.11-direct-cache-probe-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M3.1.10-translator-cache-debug.apk
-          path: Wuvatel-M3.1.10-translator-cache-debug.apk
+          name: Wuvatel-M3.1.11-direct-cache-probe-debug.apk
+          path: Wuvatel-M3.1.11-direct-cache-probe-debug.apk
           if-no-files-found: error
           archive: false
