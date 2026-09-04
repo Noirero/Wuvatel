@@ -117,7 +117,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.2", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2.3", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -150,7 +150,7 @@ private fun LoadingState() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator()
-            Text("Mengelompokkan teks manga Jepang…")
+            Text("Meningkatkan dan membersihkan OCR Jepang…")
         }
     }
 }

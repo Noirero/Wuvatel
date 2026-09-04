@@ -1,11 +1,17 @@
 package com.example.mangatranslator.ocr
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.Rect
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import kotlinx.coroutines.tasks.await
+import java.text.Normalizer
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -16,12 +22,54 @@ class JapaneseOcrEngine {
     )
 
     suspend fun recognize(bitmap: Bitmap): List<TextRegion> {
-        // OCR the exact bitmap shown by the UI so bounding-box coordinates
-        // always use the same pixel coordinate space as the preview.
-        val input = InputImage.fromBitmap(bitmap, 0)
-        val result = recognizer.process(input).await()
+        // M2.3 performs two OCR passes at the exact same pixel dimensions:
+        // the untouched manga page and a grayscale/high-contrast copy. Because
+        // dimensions do not change, every bounding box remains compatible with
+        // the original preview shown by the UI.
+        val originalResult = recognizer.process(
+            InputImage.fromBitmap(bitmap, 0),
+        ).await()
 
-        val baseCandidates = result.textBlocks.mapNotNull blockLoop@ { block ->
+        val enhancedBitmap = createEnhancedBitmap(bitmap)
+        val enhancedResult = try {
+            recognizer.process(
+                InputImage.fromBitmap(enhancedBitmap, 0),
+            ).await()
+        } finally {
+            enhancedBitmap.recycle()
+        }
+
+        val originalCandidates = extractCandidates(originalResult)
+        val enhancedCandidates = extractCandidates(enhancedResult)
+        val baseCandidates = chooseCleanerPass(
+            original = originalCandidates,
+            enhanced = enhancedCandidates,
+        )
+
+        // Keep M2.2's conservative inter-block grouping. Text cleanup happens
+        // only after geometry has been decided, so punctuation cleanup cannot
+        // accidentally change grouping behavior.
+        val groupedCandidates = mergeNearbyVerticalBlocks(
+            candidates = baseCandidates,
+            imageWidth = bitmap.width,
+        ).map { candidate ->
+            candidate.copy(text = cleanupText(candidate.text))
+        }.filter { candidate ->
+            candidate.text.isNotBlank()
+        }
+
+        val groupedRegions = groupedCandidates.map { candidate ->
+            TextRegion(
+                text = candidate.text,
+                boundingBox = Rect(candidate.boundingBox),
+            )
+        }
+
+        return sortForMangaReading(groupedRegions, bitmap.height)
+    }
+
+    private fun extractCandidates(result: Text): List<OcrCandidate> =
+        result.textBlocks.mapNotNull blockLoop@ { block ->
             val lines = block.lines.mapNotNull lineLoop@ { line ->
                 val box = line.boundingBox ?: return@lineLoop null
                 val value = line.text.trim()
@@ -33,20 +81,114 @@ class JapaneseOcrEngine {
             buildCandidate(lines)
         }
 
-        // M2.2: keep M2.1's useful inter-block merge, but prevent chain-merging
-        // across separate bubbles. Every new block must still align with the
-        // original anchor and keep the whole group's geometry compact.
-        val groupedRegions = mergeNearbyVerticalBlocks(
-            candidates = baseCandidates,
-            imageWidth = bitmap.width,
-        ).map { candidate ->
-            TextRegion(
-                text = candidate.text,
-                boundingBox = Rect(candidate.boundingBox),
-            )
+    private fun chooseCleanerPass(
+        original: List<OcrCandidate>,
+        enhanced: List<OcrCandidate>,
+    ): List<OcrCandidate> {
+        if (original.isEmpty()) return enhanced
+        if (enhanced.isEmpty()) return original
+
+        return original.map { originalCandidate ->
+            val enhancedMatch = enhanced
+                .asSequence()
+                .filter { candidate ->
+                    candidate.isVertical == originalCandidate.isVertical
+                }
+                .mapNotNull { candidate ->
+                    val geometryScore = geometryMatchScore(
+                        originalCandidate.boundingBox,
+                        candidate.boundingBox,
+                    )
+                    if (geometryScore >= MIN_PASS_GEOMETRY_SCORE) {
+                        candidate to geometryScore
+                    } else {
+                        null
+                    }
+                }
+                .maxByOrNull { it.second }
+                ?.first
+
+            if (enhancedMatch == null) {
+                originalCandidate
+            } else {
+                chooseCleanerCandidate(originalCandidate, enhancedMatch)
+            }
+        }
+    }
+
+    private fun chooseCleanerCandidate(
+        original: OcrCandidate,
+        enhanced: OcrCandidate,
+    ): OcrCandidate {
+        val originalScore = textQualityScore(original.text)
+        val enhancedScore = textQualityScore(enhanced.text)
+        val originalNoise = obviousNoiseCount(original.text)
+        val enhancedNoise = obviousNoiseCount(enhanced.text)
+
+        val useEnhanced = when {
+            enhancedScore >= originalScore + PASS_SCORE_ADVANTAGE -> true
+            enhancedNoise < originalNoise &&
+                enhancedScore >= originalScore - PASS_SCORE_NOISE_TOLERANCE -> true
+            else -> false
         }
 
-        return sortForMangaReading(groupedRegions, bitmap.height)
+        // Keep the original pass geometry. Only the recognized string is
+        // replaced, avoiding small box jitter between the two ML Kit passes.
+        return if (useEnhanced) {
+            original.copy(text = enhanced.text)
+        } else {
+            original
+        }
+    }
+
+    private fun geometryMatchScore(first: Rect, second: Rect): Float {
+        val intersectionLeft = max(first.left, second.left)
+        val intersectionTop = max(first.top, second.top)
+        val intersectionRight = min(first.right, second.right)
+        val intersectionBottom = min(first.bottom, second.bottom)
+
+        if (intersectionRight <= intersectionLeft || intersectionBottom <= intersectionTop) {
+            return 0f
+        }
+
+        val intersectionArea =
+            (intersectionRight - intersectionLeft).toLong() *
+                (intersectionBottom - intersectionTop).toLong()
+        val firstArea = first.width().coerceAtLeast(1).toLong() *
+            first.height().coerceAtLeast(1).toLong()
+        val secondArea = second.width().coerceAtLeast(1).toLong() *
+            second.height().coerceAtLeast(1).toLong()
+        val smallerArea = min(firstArea, secondArea).coerceAtLeast(1L)
+
+        return intersectionArea.toFloat() / smallerArea.toFloat()
+    }
+
+    private fun createEnhancedBitmap(source: Bitmap): Bitmap {
+        val output = Bitmap.createBitmap(
+            source.width,
+            source.height,
+            Bitmap.Config.ARGB_8888,
+        )
+        val canvas = Canvas(output)
+
+        val matrix = ColorMatrix().apply {
+            setSaturation(0f)
+            postConcat(
+                ColorMatrix(
+                    floatArrayOf(
+                        OCR_CONTRAST, 0f, 0f, 0f, OCR_CONTRAST_OFFSET,
+                        0f, OCR_CONTRAST, 0f, 0f, OCR_CONTRAST_OFFSET,
+                        0f, 0f, OCR_CONTRAST, 0f, OCR_CONTRAST_OFFSET,
+                        0f, 0f, 0f, 1f, 0f,
+                    ),
+                ),
+            )
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(matrix)
+        }
+        canvas.drawBitmap(source, 0f, 0f, paint)
+        return output
     }
 
     private fun buildCandidate(lines: List<OcrLine>): OcrCandidate {
@@ -79,6 +221,191 @@ class JapaneseOcrEngine {
             isVertical = isVertical,
         )
     }
+
+    private fun cleanupText(raw: String): String {
+        var text = Normalizer.normalize(raw, Normalizer.Form.NFC)
+            .replace("\u200B", "")
+            .replace("\u200C", "")
+            .replace("\u200D", "")
+            .replace("\uFEFF", "")
+            .trim()
+
+        if (text.isBlank()) return text
+
+        val visibleCharacters = text.count { !it.isWhitespace() }.coerceAtLeast(1)
+        val japaneseCount = text.count(::isJapaneseScript)
+        val japaneseDominant =
+            japaneseCount >= MIN_JAPANESE_FOR_CLEANUP &&
+                japaneseCount.toFloat() / visibleCharacters >= JAPANESE_DOMINANCE_RATIO
+
+        if (!japaneseDominant) {
+            return text.replace(Regex("[\\t ]{2,}"), " ")
+        }
+
+        val source = text.toCharArray()
+        text = buildString(source.size) {
+            source.forEachIndexed { index, char ->
+                when {
+                    char == '|' || char == '｜' || char == '¦' -> Unit
+                    char.isLowerCaseAscii() &&
+                        isIsolatedAsciiNoise(source, index) -> Unit
+                    char.isWhitespace() && char != '\n' &&
+                        shouldRemoveJapaneseWhitespace(source, index) -> Unit
+                    else -> append(char)
+                }
+            }
+        }
+
+        text = removeUnbalancedAsciiPair(text, '(', ')')
+        text = removeUnbalancedAsciiPair(text, '[', ']')
+
+        return text
+            .replace(Regex("[\\t ]{2,}"), " ")
+            .replace(Regex(" *\\n *"), "\n")
+            .trim()
+    }
+
+    private fun removeUnbalancedAsciiPair(
+        text: String,
+        open: Char,
+        close: Char,
+    ): String {
+        val openCount = text.count { it == open }
+        val closeCount = text.count { it == close }
+        if (openCount == closeCount) return text
+
+        return text.filter { it != open && it != close }
+    }
+
+    private fun shouldRemoveJapaneseWhitespace(
+        source: CharArray,
+        index: Int,
+    ): Boolean {
+        val previous = previousVisibleChar(source, index)
+        val next = nextVisibleChar(source, index)
+
+        return (previous?.let(::isJapaneseOrPunctuation) == true) &&
+            (next?.let(::isJapaneseOrPunctuation) == true)
+    }
+
+    private fun isIsolatedAsciiNoise(
+        source: CharArray,
+        index: Int,
+    ): Boolean {
+        val char = source[index]
+        if (!char.isLowerCaseAscii()) return false
+
+        // Preserve real Latin words such as "vs" or "web"; only a single
+        // lowercase letter embedded in otherwise Japanese text is removed.
+        if (index > 0 && source[index - 1].isAsciiLetter()) return false
+        if (index + 1 < source.size && source[index + 1].isAsciiLetter()) return false
+
+        val previous = previousVisibleChar(source, index)
+        val next = nextVisibleChar(source, index)
+        val previousFits = previous == null || isJapaneseOrPunctuation(previous)
+        val nextFits = next == null || isJapaneseOrPunctuation(next)
+
+        return previousFits && nextFits
+    }
+
+    private fun previousVisibleChar(
+        source: CharArray,
+        index: Int,
+    ): Char? {
+        var cursor = index - 1
+        while (cursor >= 0) {
+            if (!source[cursor].isWhitespace()) return source[cursor]
+            cursor--
+        }
+        return null
+    }
+
+    private fun nextVisibleChar(
+        source: CharArray,
+        index: Int,
+    ): Char? {
+        var cursor = index + 1
+        while (cursor < source.size) {
+            if (!source[cursor].isWhitespace()) return source[cursor]
+            cursor++
+        }
+        return null
+    }
+
+    private fun textQualityScore(raw: String): Float {
+        val cleaned = cleanupText(raw)
+        if (cleaned.isBlank()) return Float.NEGATIVE_INFINITY
+
+        var score = 0f
+        cleaned.forEach { char ->
+            score += when {
+                isKana(char) -> 3.0f
+                isKanji(char) -> 2.5f
+                isJapanesePunctuation(char) -> 0.25f
+                char.isAsciiLetter() -> -1.5f
+                char == '|' || char == '｜' || char == '¦' -> -3.0f
+                char == '\uFFFD' -> -4.0f
+                else -> 0f
+            }
+        }
+
+        score -= obviousNoiseCount(raw) * 1.5f
+        return score
+    }
+
+    private fun obviousNoiseCount(raw: String): Int {
+        val visibleCharacters = raw.count { !it.isWhitespace() }.coerceAtLeast(1)
+        val japaneseCount = raw.count(::isJapaneseScript)
+        val japaneseDominant =
+            japaneseCount >= MIN_JAPANESE_FOR_CLEANUP &&
+                japaneseCount.toFloat() / visibleCharacters >= JAPANESE_DOMINANCE_RATIO
+
+        if (!japaneseDominant) return 0
+
+        val source = raw.toCharArray()
+        var count = 0
+        source.forEachIndexed { index, char ->
+            if (char == '|' || char == '｜' || char == '¦' || char == '\uFFFD') {
+                count++
+            } else if (char.isLowerCaseAscii() && isIsolatedAsciiNoise(source, index)) {
+                count++
+            }
+        }
+
+        if (raw.count { it == '(' } != raw.count { it == ')' }) count++
+        if (raw.count { it == '[' } != raw.count { it == ']' }) count++
+        return count
+    }
+
+    private fun isJapaneseScript(char: Char): Boolean =
+        isKana(char) || isKanji(char)
+
+    private fun isKana(char: Char): Boolean {
+        val code = char.code
+        return code in 0x3040..0x309F ||
+            code in 0x30A0..0x30FF ||
+            code in 0x31F0..0x31FF ||
+            code in 0xFF66..0xFF9D
+    }
+
+    private fun isKanji(char: Char): Boolean {
+        val code = char.code
+        return code in 0x3400..0x4DBF ||
+            code in 0x4E00..0x9FFF ||
+            code in 0xF900..0xFAFF
+    }
+
+    private fun isJapanesePunctuation(char: Char): Boolean =
+        char in JAPANESE_PUNCTUATION
+
+    private fun isJapaneseOrPunctuation(char: Char): Boolean =
+        isJapaneseScript(char) || isJapanesePunctuation(char)
+
+    private fun Char.isAsciiLetter(): Boolean =
+        this in 'A'..'Z' || this in 'a'..'z'
+
+    private fun Char.isLowerCaseAscii(): Boolean =
+        this in 'a'..'z'
 
     private fun mergeNearbyVerticalBlocks(
         candidates: List<OcrCandidate>,
@@ -118,8 +445,6 @@ class JapaneseOcrEngine {
                     .mapNotNull { index ->
                         val candidate = ordered[index]
 
-                        // Candidate must be adjacent to at least one current
-                        // member, preserving the good M2.1 multi-column merge.
                         val pairGap = group
                             .mapNotNull { member ->
                                 if (shouldMergeVerticalPair(member, candidate, imageWidth)) {
@@ -135,9 +460,6 @@ class JapaneseOcrEngine {
                             union(candidate.boundingBox)
                         }
 
-                        // Unlike M2.1, proximity to any member is not enough:
-                        // the new block must remain aligned with the seed and
-                        // must not stretch the overall group into another bubble.
                         if (!shouldJoinVerticalGroup(
                                 anchor = seed,
                                 group = group,
@@ -215,13 +537,12 @@ class JapaneseOcrEngine {
         val smallerWidth = min(firstWidth, secondWidth)
         val centerDistanceX = abs(firstBox.centerX() - secondBox.centerX())
 
-        // Avoid treating duplicate/overlapping detections from essentially the
-        // same column as two neighbouring manga columns.
         if (centerDistanceX < smallerWidth * MIN_COLUMN_CENTER_DISTANCE_RATIO) {
             return false
         }
 
-        val widthBasedGap = (max(firstWidth, secondWidth) * MAX_COLUMN_GAP_WIDTH_MULTIPLIER).toInt()
+        val widthBasedGap =
+            (max(firstWidth, secondWidth) * MAX_COLUMN_GAP_WIDTH_MULTIPLIER).toInt()
         val imageBasedGap = (imageWidth * MAX_COLUMN_GAP_IMAGE_RATIO).toInt()
         val allowedGap = max(
             MIN_BLOCK_GAP_PX,
@@ -273,7 +594,8 @@ class JapaneseOcrEngine {
     ): List<TextRegion> {
         if (regions.size < 2) return regions
 
-        val rowTolerance = max(MIN_ROW_TOLERANCE_PX, (imageHeight * ROW_TOLERANCE_RATIO).toInt())
+        val rowTolerance =
+            max(MIN_ROW_TOLERANCE_PX, (imageHeight * ROW_TOLERANCE_RATIO).toInt())
         val rows = mutableListOf<ReadingRow>()
         val candidates = regions.sortedWith(
             compareBy<TextRegion> { it.boundingBox.top }
@@ -317,7 +639,8 @@ class JapaneseOcrEngine {
         val overlap = min(row.bottom, box.bottom) - max(row.top, box.top)
         val rowHeight = (row.bottom - row.top).coerceAtLeast(1)
         val boxHeight = box.height().coerceAtLeast(1)
-        val overlapRatio = overlap.coerceAtLeast(0).toFloat() / min(rowHeight, boxHeight)
+        val overlapRatio =
+            overlap.coerceAtLeast(0).toFloat() / min(rowHeight, boxHeight)
 
         if (overlapRatio >= MIN_VERTICAL_OVERLAP_RATIO) {
             return overlapRatio
@@ -370,5 +693,19 @@ class JapaneseOcrEngine {
         const val MAX_GROUP_WIDTH_RATIO = 0.18f
         const val MIN_GROUP_WIDTH_PX = 72
         const val MAX_BLOCKS_PER_GROUP = 5
+
+        const val OCR_CONTRAST = 1.35f
+        const val OCR_CONTRAST_OFFSET = -44.8f
+        const val MIN_PASS_GEOMETRY_SCORE = 0.55f
+        const val PASS_SCORE_ADVANTAGE = 1.0f
+        const val PASS_SCORE_NOISE_TOLERANCE = 1.5f
+        const val MIN_JAPANESE_FOR_CLEANUP = 2
+        const val JAPANESE_DOMINANCE_RATIO = 0.55f
+
+        val JAPANESE_PUNCTUATION = setOf(
+            '。', '、', '！', '？', '!', '?', '…', '‥', 'ー', '〜', '～',
+            '「', '」', '『', '』', '【', '】', '（', '）', '(', ')',
+            '・', '：', ':', '；', ';', '♪', '♡', '♥',
+        )
     }
 }
