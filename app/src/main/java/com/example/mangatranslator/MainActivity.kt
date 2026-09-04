@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.2", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.3", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -313,6 +313,9 @@ private fun ResultState(
     }
 
     val missingTranslations = regions.count { it.translation.isNullOrBlank() }
+    val unreviewedTranslations = regions.count {
+        !it.translation.isNullOrBlank() && !it.translationReviewed
+    }
     val prepareReady = diagnosticLog.any { it.contains("[PREPARE-DONE]") }
     val cacheReady = diagnosticLog.any { it.contains("[CACHE-PROBE-DONE]") || it.contains("[CACHE-PROBE-FINAL-DONE]") }
     val modelsReady = diagnosticLog.any { it.contains("[READY]") }
@@ -333,10 +336,11 @@ private fun ResultState(
         )
 
         Text("Terdeteksi: ${regions.size} kelompok teks")
-        Text("Belum dicek: ${regions.count { !it.reviewed }}")
+        Text("OCR belum dicek: ${regions.count { !it.reviewed }}")
         Text("Perlu perhatian: ${regions.count(::needsReviewAttention)}")
+        Text("Terjemahan belum dicek: $unreviewedTranslations")
         Text(
-            "Ketuk teks Jepang untuk memeriksa atau mengedit sebelum diterjemahkan.",
+            "Ketuk teks Jepang untuk memeriksa atau mengedit. Setelah diperbaiki, terjemahkan ulang hanya region itu.",
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
@@ -354,7 +358,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.2 · ML Kit retry diagnostics")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.3 · review actions")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -453,7 +457,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.2 diagnostic log",
+                                "Wuvatel M3.2.3 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -488,7 +492,7 @@ private fun ResultState(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
+                            .clickable(enabled = !translationBusy) {
                                 editingJapaneseIndex = index
                                 japaneseDraft = region.text
                             }
@@ -498,7 +502,7 @@ private fun ResultState(
                         Text("${index + 1}. Jepang: ${region.text}")
                         Text(
                             text = when {
-                                region.reviewed -> "Sudah dicek"
+                                region.reviewed -> "OCR sudah dicek"
                                 needsAttention -> "Perlu cek · hasil perlu perhatian"
                                 else -> "Perlu cek"
                             },
@@ -511,17 +515,36 @@ private fun ResultState(
                         )
                     }
 
+                    if (!region.reviewed) {
+                        TextButton(
+                            enabled = !translationBusy,
+                            onClick = {
+                                val updated = regions.toMutableList()
+                                if (index in updated.indices) {
+                                    updated[index] = updated[index].copy(reviewed = true)
+                                    regions = updated
+                                }
+                            },
+                        ) {
+                            Text("OCR sudah benar")
+                        }
+                    }
+
                     val translated = region.translation
                     if (translated.isNullOrBlank()) {
                         Text(
-                            "Indonesia: belum diterjemahkan",
+                            text = if (region.reviewed) {
+                                "Indonesia: perlu diterjemahkan"
+                            } else {
+                                "Indonesia: belum diterjemahkan"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
+                                .clickable(enabled = !translationBusy) {
                                     editingTranslationIndex = index
                                     translationDraft = translated
                                 }
@@ -531,13 +554,32 @@ private fun ResultState(
                             Text("Indonesia: $translated")
                             Text(
                                 text = if (region.translationReviewed) {
-                                    "Terjemahan sudah diedit"
+                                    "Terjemahan sudah diperiksa"
                                 } else {
                                     "Hasil otomatis · Natural sederhana · ketuk untuk edit"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary,
                             )
+                        }
+
+                        if (!region.translationReviewed) {
+                            TextButton(
+                                enabled = !translationBusy,
+                                onClick = {
+                                    val updated = regions.toMutableList()
+                                    if (index in updated.indices &&
+                                        !updated[index].translation.isNullOrBlank()
+                                    ) {
+                                        updated[index] = updated[index].copy(
+                                            translationReviewed = true,
+                                        )
+                                        regions = updated
+                                    }
+                                },
+                            ) {
+                                Text("Terjemahan sudah benar")
+                            }
                         }
                     }
 
@@ -552,7 +594,7 @@ private fun ResultState(
                                     translationError = null
                                     diagnosticLog = emptyList()
                                     showFullDiagnosticLog = false
-                                    appendDiagnostic("[UI] M3.2.2 · terjemahkan ulang region ${index + 1}")
+                                    appendDiagnostic("[UI] M3.2.3 · terjemahkan ulang region ${index + 1}")
                                     translationStatus = "Menyiapkan region ${index + 1}…"
                                     try {
                                         translator.ensureModel(

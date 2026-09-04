@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.mangatranslator"
         minSdk = 23
         targetSdk = 36
-        versionCode = 23
-        versionName = "0.3.2.2-mlkit-retry-diagnostics"
+        versionCode = 24
+        versionName = "0.3.2.3-review-actions"
     }
 
     signingConfigs {
