@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.1", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.2", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -354,7 +354,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.1 · natural sederhana")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.2 · ML Kit retry diagnostics")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -453,7 +453,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.1 diagnostic log",
+                                "Wuvatel M3.2.2 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -552,7 +552,7 @@ private fun ResultState(
                                     translationError = null
                                     diagnosticLog = emptyList()
                                     showFullDiagnosticLog = false
-                                    appendDiagnostic("[UI] M3.2.1 · terjemahkan ulang region ${index + 1}")
+                                    appendDiagnostic("[UI] M3.2.2 · terjemahkan ulang region ${index + 1}")
                                     translationStatus = "Menyiapkan region ${index + 1}…"
                                     try {
                                         translator.ensureModel(
