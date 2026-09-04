@@ -526,7 +526,7 @@ private fun ResultState(
                                 }
                             },
                         ) {
-                            Text("OCR sudah benar")
+                            Text("Konfirmasi OCR")
                         }
                     }
 
@@ -578,7 +578,7 @@ private fun ResultState(
                                     }
                                 },
                             ) {
-                                Text("Terjemahan sudah benar")
+                                Text("Konfirmasi terjemahan")
                             }
                         }
                     }
