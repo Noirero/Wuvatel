@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.6", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.7", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -362,7 +362,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.6 · kana romanization review")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.7 · embedded romanization review")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -461,7 +461,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.6 diagnostic log",
+                                "Wuvatel M3.2.7 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -603,7 +603,7 @@ private fun ResultState(
                                     translationError = null
                                     diagnosticLog = emptyList()
                                     showFullDiagnosticLog = false
-                                    appendDiagnostic("[UI] M3.2.6 · terjemahkan ulang region ${index + 1}")
+                                    appendDiagnostic("[UI] M3.2.7 · terjemahkan ulang region ${index + 1}")
                                     translationStatus = "Menyiapkan region ${index + 1}…"
                                     try {
                                         translator.ensureModel(
@@ -725,6 +725,13 @@ private fun translationReviewAttentionReason(region: TextRegion): String? {
     }
 
     val normalized = translated.lowercase()
+    val containsEmbeddedJapaneseRomanizedTerm =
+        Regex("\\b(atashi|watashi|boku|ore|omae)\\b")
+            .containsMatchIn(normalized) && translated.any { it.isWhitespace() }
+    if (hasJapaneseSourceScript && containsEmbeddedJapaneseRomanizedTerm) {
+        return "masih mengandung romanisasi Jepang"
+    }
+
     val unlikelyBodyPartDayPair =
         Regex("\\b(mata|tangan|kaki|kepala|mulut|hidung|telinga)\\s+(senin|selasa|rabu|kamis|jum(?:at|['’]at)|sabtu|minggu)\\b")
             .containsMatchIn(normalized)
