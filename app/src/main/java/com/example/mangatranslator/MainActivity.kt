@@ -6,8 +6,8 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,8 +51,10 @@ import androidx.compose.ui.unit.dp
 import com.example.mangatranslator.ocr.JapaneseOcrEngine
 import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
+import com.example.mangatranslator.translation.OfflineJapaneseIndonesianTranslator
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -81,11 +84,13 @@ private fun MangaOcrScreen() {
     val context = LocalContext.current
     val ocrEngine = remember { JapaneseOcrEngine() }
     val regionRefiner = remember { RegionOcrRefiner() }
+    val translator = remember { OfflineJapaneseIndonesianTranslator() }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var state by remember { mutableStateOf<OcrUiState>(OcrUiState.Empty) }
 
-    DisposableEffect(ocrEngine, regionRefiner) {
+    DisposableEffect(ocrEngine, regionRefiner, translator) {
         onDispose {
+            translator.close()
             regionRefiner.close()
             ocrEngine.close()
         }
@@ -127,7 +132,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.6", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -143,7 +148,7 @@ private fun MangaOcrScreen() {
             OcrUiState.Empty -> EmptyState()
             OcrUiState.Loading -> LoadingState()
             is OcrUiState.Error -> ErrorState(current.message)
-            is OcrUiState.Ready -> ResultState(current)
+            is OcrUiState.Ready -> ResultState(current, translator)
         }
     }
 }
@@ -176,26 +181,42 @@ private fun ErrorState(message: String) {
 }
 
 @Composable
-private fun ResultState(state: OcrUiState.Ready) {
+private fun ResultState(
+    state: OcrUiState.Ready,
+    translator: OfflineJapaneseIndonesianTranslator,
+) {
+    val scope = rememberCoroutineScope()
     var regions by remember(state.uri, state.regions) {
         mutableStateOf(state.regions)
     }
-    var editingIndex by remember(state.uri, state.regions) {
+    var editingJapaneseIndex by remember(state.uri, state.regions) {
         mutableStateOf<Int?>(null)
     }
-    var draftText by remember(state.uri, state.regions) {
+    var japaneseDraft by remember(state.uri, state.regions) {
         mutableStateOf("")
     }
+    var editingTranslationIndex by remember(state.uri, state.regions) {
+        mutableStateOf<Int?>(null)
+    }
+    var translationDraft by remember(state.uri, state.regions) {
+        mutableStateOf("")
+    }
+    var translationBusy by remember(state.uri) {
+        mutableStateOf(false)
+    }
+    var translationError by remember(state.uri) {
+        mutableStateOf<String?>(null)
+    }
 
-    val currentEditingIndex = editingIndex
-    if (currentEditingIndex != null && currentEditingIndex in regions.indices) {
+    val currentJapaneseIndex = editingJapaneseIndex
+    if (currentJapaneseIndex != null && currentJapaneseIndex in regions.indices) {
         AlertDialog(
-            onDismissRequest = { editingIndex = null },
+            onDismissRequest = { editingJapaneseIndex = null },
             title = { Text("Edit teks Jepang") },
             text = {
                 OutlinedTextField(
-                    value = draftText,
-                    onValueChange = { draftText = it },
+                    value = japaneseDraft,
+                    onValueChange = { japaneseDraft = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Hasil OCR") },
                     minLines = 3,
@@ -203,27 +224,72 @@ private fun ResultState(state: OcrUiState.Ready) {
             },
             confirmButton = {
                 TextButton(
-                    enabled = draftText.trim().isNotBlank(),
+                    enabled = japaneseDraft.trim().isNotBlank(),
                     onClick = {
                         val updated = regions.toMutableList()
-                        updated[currentEditingIndex] = updated[currentEditingIndex].copy(
-                            text = draftText.trim(),
+                        val old = updated[currentJapaneseIndex]
+                        val newText = japaneseDraft.trim()
+                        val changed = newText != old.text
+                        updated[currentJapaneseIndex] = old.copy(
+                            text = newText,
                             reviewed = true,
+                            translation = if (changed) null else old.translation,
+                            translationReviewed = if (changed) false else old.translationReviewed,
                         )
                         regions = updated
-                        editingIndex = null
+                        editingJapaneseIndex = null
                     },
                 ) {
                     Text("Simpan")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { editingIndex = null }) {
+                TextButton(onClick = { editingJapaneseIndex = null }) {
                     Text("Batal")
                 }
             },
         )
     }
+
+    val currentTranslationIndex = editingTranslationIndex
+    if (currentTranslationIndex != null && currentTranslationIndex in regions.indices) {
+        AlertDialog(
+            onDismissRequest = { editingTranslationIndex = null },
+            title = { Text("Edit terjemahan Indonesia") },
+            text = {
+                OutlinedTextField(
+                    value = translationDraft,
+                    onValueChange = { translationDraft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Terjemahan") },
+                    minLines = 3,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = translationDraft.trim().isNotBlank(),
+                    onClick = {
+                        val updated = regions.toMutableList()
+                        updated[currentTranslationIndex] = updated[currentTranslationIndex].copy(
+                            translation = translationDraft.trim(),
+                            translationReviewed = true,
+                        )
+                        regions = updated
+                        editingTranslationIndex = null
+                    },
+                ) {
+                    Text("Simpan")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingTranslationIndex = null }) {
+                    Text("Batal")
+                }
+            },
+        )
+    }
+
+    val missingTranslations = regions.count { it.translation.isNullOrBlank() }
 
     Column(
         modifier = Modifier
@@ -242,9 +308,70 @@ private fun ResultState(state: OcrUiState.Ready) {
         Text("Terdeteksi: ${regions.size} kelompok teks")
         Text("Belum dicek: ${regions.count { !it.reviewed }}")
         Text(
-            "Ketuk teks untuk memeriksa atau mengedit sebelum diterjemahkan.",
+            "Ketuk teks Jepang untuk memeriksa atau mengedit sebelum diterjemahkan.",
             style = MaterialTheme.typography.bodySmall,
         )
+
+        Button(
+            enabled = regions.isNotEmpty() && missingTranslations > 0 && !translationBusy,
+            onClick = {
+                scope.launch {
+                    translationBusy = true
+                    translationError = null
+                    try {
+                        translator.ensureModel()
+                        val updated = regions.toMutableList()
+                        for (index in updated.indices) {
+                            if (updated[index].translation.isNullOrBlank()) {
+                                val translated = translator.translate(updated[index].text)
+                                updated[index] = updated[index].copy(
+                                    translation = translated,
+                                    translationReviewed = false,
+                                )
+                                regions = updated.toList()
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        translationError = t.message ?: "Terjemahan gagal"
+                    } finally {
+                        translationBusy = false
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                when {
+                    translationBusy -> "Menyiapkan / menerjemahkan…"
+                    missingTranslations == 0 -> "Semua sudah diterjemahkan"
+                    else -> "Terjemahkan JP → ID ($missingTranslations)"
+                },
+            )
+        }
+
+        if (translationBusy) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator()
+                Text("Model pertama kali akan diunduh, lalu terjemahan berjalan di perangkat.")
+            }
+        } else {
+            Text(
+                "Model terjemahan perlu internet saat pertama kali diunduh. Setelah tersedia, JP → ID berjalan offline tanpa API key.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        translationError?.let { message ->
+            Text(
+                "Terjemahan gagal: $message",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
         if (regions.isEmpty()) {
@@ -252,26 +379,62 @@ private fun ResultState(state: OcrUiState.Ready) {
         } else {
             regions.forEachIndexed { index, region ->
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            editingIndex = index
-                            draftText = region.text
-                        }
-                        .padding(vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("${index + 1}. ${region.text}")
-                    Text(
-                        text = if (region.reviewed) "Sudah dicek" else "Perlu cek",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (region.reviewed) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                editingJapaneseIndex = index
+                                japaneseDraft = region.text
+                            }
+                            .padding(vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text("${index + 1}. Jepang: ${region.text}")
+                        Text(
+                            text = if (region.reviewed) "Sudah dicek" else "Perlu cek",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (region.reviewed) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+
+                    val translated = region.translation
+                    if (translated.isNullOrBlank()) {
+                        Text(
+                            "Indonesia: belum diterjemahkan",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    editingTranslationIndex = index
+                                    translationDraft = translated
+                                }
+                                .padding(bottom = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text("Indonesia: $translated")
+                            Text(
+                                text = if (region.translationReviewed) {
+                                    "Terjemahan sudah diedit"
+                                } else {
+                                    "Hasil otomatis · ketuk untuk edit"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                    }
                 }
+
                 if (index != regions.lastIndex) {
                     HorizontalDivider()
                 }
