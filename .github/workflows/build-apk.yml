@@ -17,42 +17,72 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check permanent signing secret
+        id: signing
+        shell: bash
+        env:
+          WUVATEL_DEBUG_KEYSTORE_BASE64: ${{ secrets.WUVATEL_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$WUVATEL_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::WUVATEL_DEBUG_KEYSTORE_BASE64 is not configured. APK build is skipped to prevent signing with a temporary key."
+          fi
+
       - name: Checkout source
+        if: steps.signing.outputs.available == 'true'
         uses: actions/checkout@v6
 
       - name: Set up JDK 17
+        if: steps.signing.outputs.available == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
+        if: steps.signing.outputs.available == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK 36
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle 9.6.0
+        if: steps.signing.outputs.available == 'true'
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.6.0'
 
-      - name: Restore Wuvatel debug signing key
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: wuvatel-beta-debug-keystore-v1
+      - name: Install permanent Wuvatel debug signing key
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        env:
+          WUVATEL_DEBUG_KEYSTORE_BASE64: ${{ secrets.WUVATEL_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          mkdir -p "$HOME/.android"
+          printf '%s' "$WUVATEL_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          keytool -list \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            > /dev/null
 
       - name: Build debug APK
+        if: steps.signing.outputs.available == 'true'
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Prepare APK
+        if: steps.signing.outputs.available == 'true'
         run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.3-debug.apk
 
       - name: Upload APK
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: Wuvatel-M3.1.3-debug.apk
