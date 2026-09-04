@@ -220,6 +220,9 @@ private fun ResultState(
     var diagnosticLog by remember(state.uri) {
         mutableStateOf<List<String>>(emptyList())
     }
+    var showFullDiagnosticLog by remember(state.uri) {
+        mutableStateOf(false)
+    }
 
     fun appendDiagnostic(line: String) {
         diagnosticLog = (diagnosticLog + line).takeLast(80)
@@ -307,6 +310,9 @@ private fun ResultState(
     }
 
     val missingTranslations = regions.count { it.translation.isNullOrBlank() }
+    val internetReady = diagnosticLog.any { it.contains("[NET] Probe berhasil") }
+    val modelsReady = diagnosticLog.any { it.contains("[READY]") }
+    val translationFinished = diagnosticLog.any { it.contains("[UI] Semua region yang kosong selesai diterjemahkan") }
 
     Column(
         modifier = Modifier
@@ -336,20 +342,21 @@ private fun ResultState(
                     translationBusy = true
                     translationError = null
                     diagnosticLog = emptyList()
-                    appendDiagnostic("[UI] Mulai sesi diagnostik M3.1.8 · ML Kit retry 1/2")
-                    translationStatus = "Memulai diagnostik model…"
+                    showFullDiagnosticLog = false
+                    appendDiagnostic("[UI] Mulai sesi diagnostik M3.1.8 · ML Kit")
+                    translationStatus = "Menyiapkan model…"
                     modelStatus = "Belum siap"
                     try {
-                        modelStatus = translator.ensureModel(
+                        translator.ensureModel(
                             onStatus = { status -> translationStatus = status },
                             onLog = ::appendDiagnostic,
                         )
+                        modelStatus = "Siap"
                         appendDiagnostic("[UI] Model siap; mulai menerjemahkan ${updatedCount(regions)} region")
                         val updated = regions.toMutableList()
                         for (index in updated.indices) {
                             if (updated[index].translation.isNullOrBlank()) {
                                 translationStatus = "Menerjemahkan ${index + 1}/${updated.size}…"
-                                appendDiagnostic("[UI] Region ${index + 1}/${updated.size}: translate dimulai")
                                 val translated = translator.translate(
                                     text = updated[index].text,
                                     onLog = ::appendDiagnostic,
@@ -392,9 +399,9 @@ private fun ResultState(
                 CircularProgressIndicator()
                 Text(translationStatus)
             }
-        } else {
+        } else if (translationStatus != "Belum dimulai") {
             Text(
-                "M3.1.8 · ML Kit 1/2 · Tahap: $translationStatus · Model: $modelStatus",
+                "Terjemahan: $translationStatus · Model offline: $modelStatus",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -409,23 +416,47 @@ private fun ResultState(
 
         if (diagnosticLog.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            Text("Log diagnostik", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Log ini menunjukkan tahap yang benar-benar selesai. ML Kit tidak menyediakan progress persen download model.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            diagnosticLog.forEach { line ->
-                Text(line, style = MaterialTheme.typography.labelSmall)
+            Text("Status teknis", style = MaterialTheme.typography.titleSmall)
+            if (internetReady) {
+                Text("Internet: OK", style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(
-                onClick = {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(
-                        ClipData.newPlainText("Wuvatel M3.1.8 diagnostic log", diagnosticLog.joinToString("\n")),
-                    )
-                },
-            ) {
-                Text("Salin log")
+            if (modelsReady) {
+                Text("Model JP → ID: siap offline", style = MaterialTheme.typography.bodySmall)
+            }
+            if (translationFinished) {
+                Text("Proses: selesai", style = MaterialTheme.typography.bodySmall)
+            }
+            if (!internetReady && !modelsReady && !translationFinished && translationBusy) {
+                Text("Pemeriksaan sedang berjalan…", style = MaterialTheme.typography.bodySmall)
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { showFullDiagnosticLog = !showFullDiagnosticLog }) {
+                    Text(if (showFullDiagnosticLog) "Sembunyikan detail" else "Lihat detail")
+                }
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(
+                            ClipData.newPlainText(
+                                "Wuvatel M3.1.8 diagnostic log",
+                                diagnosticLog.joinToString("\n"),
+                            ),
+                        )
+                    },
+                ) {
+                    Text("Salin log")
+                }
+            }
+
+            if (showFullDiagnosticLog) {
+                Text(
+                    "Detail diagnostik hanya diperlukan saat terjadi masalah.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                diagnosticLog.forEach { line ->
+                    Text(line, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
 
