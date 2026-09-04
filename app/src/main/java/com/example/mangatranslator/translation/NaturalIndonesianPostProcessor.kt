@@ -17,7 +17,7 @@ object NaturalIndonesianPostProcessor {
         return machineTranslation
             .trim()
             .replace(Regex("\\s+"), " ")
-            .replace(Regex("\\s+([,.!?;:])"), "$1")
+            .replace(Regex("\\s+([,.!?;:])")) { match -> match.groupValues[1] }
             .replace(Regex("(?i)-\\s*(chan|san|kun|sama|senpai)\\b")) { match ->
                 "-${match.groupValues[1].lowercase()}"
             }
