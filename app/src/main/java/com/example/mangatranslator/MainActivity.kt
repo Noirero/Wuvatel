@@ -44,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.mangatranslator.ocr.JapaneseOcrEngine
+import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
 import kotlinx.coroutines.Dispatchers
@@ -75,11 +76,15 @@ private sealed interface OcrUiState {
 private fun MangaOcrScreen() {
     val context = LocalContext.current
     val ocrEngine = remember { JapaneseOcrEngine() }
+    val regionRefiner = remember { RegionOcrRefiner() }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var state by remember { mutableStateOf<OcrUiState>(OcrUiState.Empty) }
 
-    DisposableEffect(ocrEngine) {
-        onDispose { ocrEngine.close() }
+    DisposableEffect(ocrEngine, regionRefiner) {
+        onDispose {
+            regionRefiner.close()
+            ocrEngine.close()
+        }
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -105,8 +110,9 @@ private fun MangaOcrScreen() {
                     BitmapFactory.decodeStream(stream)
                 } ?: error("Gambar tidak dapat dibaca")
             }
-            val regions = ocrEngine.recognize(bitmap)
-            OcrUiState.Ready(uri, bitmap, regions)
+            val groupedRegions = ocrEngine.recognize(bitmap)
+            val refinedRegions = regionRefiner.refine(bitmap, groupedRegions)
+            OcrUiState.Ready(uri, bitmap, refinedRegions)
         } catch (t: Throwable) {
             OcrUiState.Error(t.message ?: "OCR gagal")
         }
@@ -117,7 +123,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.3", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2.4", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -148,9 +154,12 @@ private fun EmptyState() {
 @Composable
 private fun LoadingState() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             CircularProgressIndicator()
-            Text("Meningkatkan dan membersihkan OCR Jepang…")
+            Text("Memperbesar dan membaca ulang tiap region…")
         }
     }
 }
