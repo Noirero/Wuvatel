@@ -1,4 +1,4 @@
-# M3.1.5 worker build
+# Permanent signing verification build
 name: Build Debug APK
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M3.1.5
+    name: Build Wuvatel M3.1.6 signed
     runs-on: ubuntu-latest
 
     steps:
@@ -27,65 +27,87 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::WUVATEL_DEBUG_KEYSTORE_BASE64 is not configured. APK build is skipped to prevent signing with a temporary key."
+            echo "::error::WUVATEL_DEBUG_KEYSTORE_BASE64 is not configured. Refusing to build an APK with a temporary signing key."
+            exit 1
           fi
 
       - name: Checkout source
-        if: steps.signing.outputs.available == 'true'
         uses: actions/checkout@v6
 
       - name: Set up JDK 17
-        if: steps.signing.outputs.available == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        if: steps.signing.outputs.available == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK 36
-        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle 9.6.0
-        if: steps.signing.outputs.available == 'true'
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.6.0'
 
-      - name: Install permanent Wuvatel debug signing key
-        if: steps.signing.outputs.available == 'true'
+      - name: Install permanent Wuvatel signing key
         shell: bash
         env:
           WUVATEL_DEBUG_KEYSTORE_BASE64: ${{ secrets.WUVATEL_DEBUG_KEYSTORE_BASE64 }}
         run: |
           umask 077
-          mkdir -p "$HOME/.android"
-          printf '%s' "$WUVATEL_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          SIGNING_FILE="$RUNNER_TEMP/wuvatel-beta.keystore"
+          printf '%s' "$WUVATEL_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$SIGNING_FILE"
           keytool -list \
-            -keystore "$HOME/.android/debug.keystore" \
+            -keystore "$SIGNING_FILE" \
             -storepass android \
             -alias androiddebugkey \
             > /dev/null
+          echo "WUVATEL_SIGNING_STORE_FILE=$SIGNING_FILE" >> "$GITHUB_ENV"
 
-      - name: Build debug APK
-        if: steps.signing.outputs.available == 'true'
+      - name: Build debug APK with explicit signing key
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Verify APK uses permanent signing certificate
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          KEYSTORE_SHA256=$(keytool -list -v \
+            -keystore "$WUVATEL_SIGNING_STORE_FILE" \
+            -storepass android \
+            -alias androiddebugkey \
+            | awk -F': ' '/SHA256:/{print $2; exit}' \
+            | tr -d ':' \
+            | tr '[:upper:]' '[:lower:]')
+          APK_SHA256=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" \
+            | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}' \
+            | tr -d ':' \
+            | tr '[:upper:]' '[:lower:]')
+
+          if [ -z "$KEYSTORE_SHA256" ] || [ -z "$APK_SHA256" ]; then
+            echo "::error::Could not read signing certificate fingerprints."
+            exit 1
+          fi
+
+          echo "Permanent keystore SHA256: $KEYSTORE_SHA256"
+          echo "Built APK certificate SHA256: $APK_SHA256"
+
+          if [ "$KEYSTORE_SHA256" != "$APK_SHA256" ]; then
+            echo "::error::APK signing certificate does not match permanent keystore. Refusing to upload."
+            exit 1
+          fi
+
       - name: Prepare APK
-        if: steps.signing.outputs.available == 'true'
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.5-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.6-permanent-signing-debug.apk
 
       - name: Upload APK
-        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M3.1.5-debug.apk
-          path: Wuvatel-M3.1.5-debug.apk
+          name: Wuvatel-M3.1.6-permanent-signing-debug.apk
+          path: Wuvatel-M3.1.6-permanent-signing-debug.apk
           if-no-files-found: error
           archive: false
