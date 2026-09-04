@@ -132,7 +132,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.4", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -206,6 +206,12 @@ private fun ResultState(
     }
     var translationError by remember(state.uri) {
         mutableStateOf<String?>(null)
+    }
+    var translationStatus by remember(state.uri) {
+        mutableStateOf("Belum dimulai")
+    }
+    var modelStatus by remember(state.uri) {
+        mutableStateOf("Belum diverifikasi")
     }
 
     val currentJapaneseIndex = editingJapaneseIndex
@@ -318,11 +324,16 @@ private fun ResultState(
                 scope.launch {
                     translationBusy = true
                     translationError = null
+                    translationStatus = "Memulai diagnostik M3.1.4…"
+                    modelStatus = "Belum siap"
                     try {
-                        translator.ensureModel()
+                        modelStatus = translator.ensureModel { status ->
+                            translationStatus = status
+                        }
                         val updated = regions.toMutableList()
                         for (index in updated.indices) {
                             if (updated[index].translation.isNullOrBlank()) {
+                                translationStatus = "Menerjemahkan ${index + 1}/${updated.size}…"
                                 val translated = translator.translate(updated[index].text)
                                 updated[index] = updated[index].copy(
                                     translation = translated,
@@ -331,8 +342,10 @@ private fun ResultState(
                                 regions = updated.toList()
                             }
                         }
+                        translationStatus = "Selesai"
                     } catch (t: Throwable) {
-                        translationError = t.message ?: "Terjemahan gagal"
+                        translationError = t.message ?: translator.diagnosticMessage(t)
+                        translationStatus = "Gagal"
                     } finally {
                         translationBusy = false
                     }
@@ -355,11 +368,11 @@ private fun ResultState(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator()
-                Text("Model pertama kali akan diunduh, lalu terjemahan berjalan di perangkat.")
+                Text(translationStatus)
             }
         } else {
             Text(
-                "Model terjemahan perlu internet saat pertama kali diunduh. Setelah tersedia, JP → ID berjalan offline tanpa API key.",
+                "Diagnostik M3.1.4 · Tahap: $translationStatus · Model: $modelStatus",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
