@@ -1,4 +1,4 @@
-# M3.1.4 diagnostic build
+# M3.1.5 worker build
 name: Build Debug APK
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M3.1.4
+    name: Build Wuvatel M3.1.5
     runs-on: ubuntu-latest
 
     steps:
@@ -79,13 +79,13 @@ jobs:
 
       - name: Prepare APK
         if: steps.signing.outputs.available == 'true'
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.4-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.5-debug.apk
 
       - name: Upload APK
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M3.1.4-debug.apk
-          path: Wuvatel-M3.1.4-debug.apk
+          name: Wuvatel-M3.1.5-debug.apk
+          path: Wuvatel-M3.1.5-debug.apk
           if-no-files-found: error
           archive: false
