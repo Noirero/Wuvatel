@@ -16,13 +16,16 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
 /**
- * M3.1.11 - direct cache probe.
+ * M3.1.11 - direct cache probe, retained for M3.2.
  *
  * RemoteModelManager remains diagnostic only. Before starting any model download,
  * Wuvatel directly calls Translator.translate() with a tiny Japanese probe. ML Kit
  * documents translate() as failing with NOT_FOUND when model files are absent, so
  * a successful probe proves the translator can really use its local model cache.
  * Only when that probe fails do we call the no-argument downloadModelIfNeeded().
+ *
+ * M3.2 adds a conservative Natural Indonesian post-processing layer after the raw
+ * ML Kit result. Model preparation/download behavior is intentionally unchanged.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -50,7 +53,7 @@ class OfflineJapaneseIndonesianTranslator {
 
         log(
             "START",
-            "Wuvatel M3.1.11 · direct cache probe · Android ${Build.VERSION.RELEASE} " +
+            "Wuvatel M3.2.0 · natural sederhana · Android ${Build.VERSION.RELEASE} " +
                 "(SDK ${Build.VERSION.SDK_INT}) · ${Build.MANUFACTURER} ${Build.MODEL}",
         )
 
@@ -262,15 +265,25 @@ class OfflineJapaneseIndonesianTranslator {
         val startedAt = SystemClock.elapsedRealtime()
         onLog("+0ms [TRANSLATE] Memulai translate() untuk ${text.length} karakter")
         try {
-            val translated = withTimeout(TRANSLATION_TIMEOUT_MS) {
+            val machineTranslation = withTimeout(TRANSLATION_TIMEOUT_MS) {
                 awaitMlKitTaskOffMain(
                     threadName = "wuvatel-mlkit-translate",
                     taskFactory = { translator.translate(text) },
                 ).trim()
             }
+            val translated = NaturalIndonesianPostProcessor.process(
+                japanese = text,
+                machineTranslation = machineTranslation,
+            )
+            val elapsed = SystemClock.elapsedRealtime() - startedAt
+            if (translated != machineTranslation) {
+                onLog(
+                    "+${elapsed}ms [NATURALIZE] Natural sederhana mengubah hasil ML Kit: " +
+                        "${machineTranslation.length} → ${translated.length} karakter",
+                )
+            }
             onLog(
-                "+${SystemClock.elapsedRealtime() - startedAt}ms [TRANSLATE] Selesai; " +
-                    "hasil ${translated.length} karakter",
+                "+${elapsed}ms [TRANSLATE] Selesai; hasil ${translated.length} karakter",
             )
             return translated
         } catch (t: TimeoutCancellationException) {
