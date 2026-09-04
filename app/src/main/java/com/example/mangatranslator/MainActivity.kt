@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.5", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.6", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -362,7 +362,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.5 · translation quality signals")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.6 · kana romanization review")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -461,7 +461,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.5 diagnostic log",
+                                "Wuvatel M3.2.6 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -603,7 +603,7 @@ private fun ResultState(
                                     translationError = null
                                     diagnosticLog = emptyList()
                                     showFullDiagnosticLog = false
-                                    appendDiagnostic("[UI] M3.2.5 · terjemahkan ulang region ${index + 1}")
+                                    appendDiagnostic("[UI] M3.2.6 · terjemahkan ulang region ${index + 1}")
                                     translationStatus = "Menyiapkan region ${index + 1}…"
                                     try {
                                         translator.ensureModel(
@@ -687,8 +687,10 @@ private fun translationReviewAttentionReason(region: TextRegion): String? {
     val translated = region.translation?.trim().orEmpty()
     if (translated.isBlank()) return null
 
-    val hasKanji = japanese.any { char ->
-        char.code in 0x3400..0x4DBF ||
+    val hasJapaneseSourceScript = japanese.any { char ->
+        char.code in 0x3040..0x30FF ||
+            char.code in 0x31F0..0x31FF ||
+            char.code in 0x3400..0x4DBF ||
             char.code in 0x4E00..0x9FFF ||
             char.code in 0xF900..0xFAFF
     }
@@ -713,7 +715,12 @@ private fun translationReviewAttentionReason(region: TextRegion): String? {
 
     val looksLikeSingleRomanizedToken =
         Regex("^[A-Za-z][A-Za-z'’-]{3,}$").matches(translated)
-    if (hasKanji && looksLikeSingleRomanizedToken) {
+    val looksLikeHonorificName =
+        Regex(
+            "^[A-Za-z][A-Za-z'’]+-(chan|san|kun|sama|senpai|sensei)$",
+            RegexOption.IGNORE_CASE,
+        ).matches(translated)
+    if (hasJapaneseSourceScript && looksLikeSingleRomanizedToken && !looksLikeHonorificName) {
         return "hasil tampak seperti romanisasi"
     }
 
