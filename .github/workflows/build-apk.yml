@@ -1,4 +1,4 @@
-# Permanent signing verification build
+# M3.1.7 diagnostic build with permanent signing verification
 name: Build Debug APK
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M3.1.6 signed
+    name: Build Wuvatel M3.1.7 diagnostics
     runs-on: ubuntu-latest
 
     steps:
@@ -102,12 +102,12 @@ jobs:
           fi
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.6-permanent-signing-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.1.7-diagnostics-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M3.1.6-permanent-signing-debug.apk
-          path: Wuvatel-M3.1.6-permanent-signing-debug.apk
+          name: Wuvatel-M3.1.7-diagnostics-debug.apk
+          path: Wuvatel-M3.1.7-diagnostics-debug.apk
           if-no-files-found: error
           archive: false

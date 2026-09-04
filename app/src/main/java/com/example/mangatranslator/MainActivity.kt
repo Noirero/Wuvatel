@@ -1,5 +1,8 @@
 package com.example.mangatranslator
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -132,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.5", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.7", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -185,6 +188,7 @@ private fun ResultState(
     state: OcrUiState.Ready,
     translator: OfflineJapaneseIndonesianTranslator,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var regions by remember(state.uri, state.regions) {
         mutableStateOf(state.regions)
@@ -212,6 +216,13 @@ private fun ResultState(
     }
     var modelStatus by remember(state.uri) {
         mutableStateOf("Belum diverifikasi")
+    }
+    var diagnosticLog by remember(state.uri) {
+        mutableStateOf<List<String>>(emptyList())
+    }
+
+    fun appendDiagnostic(line: String) {
+        diagnosticLog = (diagnosticLog + line).takeLast(80)
     }
 
     val currentJapaneseIndex = editingJapaneseIndex
@@ -324,17 +335,25 @@ private fun ResultState(
                 scope.launch {
                     translationBusy = true
                     translationError = null
-                    translationStatus = "Memulai M3.1.5 worker…"
+                    diagnosticLog = emptyList()
+                    appendDiagnostic("[UI] Mulai sesi diagnostik M3.1.7")
+                    translationStatus = "Memulai diagnostik model…"
                     modelStatus = "Belum siap"
                     try {
-                        modelStatus = translator.ensureModel { status ->
-                            translationStatus = status
-                        }
+                        modelStatus = translator.ensureModel(
+                            onStatus = { status -> translationStatus = status },
+                            onLog = ::appendDiagnostic,
+                        )
+                        appendDiagnostic("[UI] Model siap; mulai menerjemahkan ${updatedCount(regions)} region")
                         val updated = regions.toMutableList()
                         for (index in updated.indices) {
                             if (updated[index].translation.isNullOrBlank()) {
                                 translationStatus = "Menerjemahkan ${index + 1}/${updated.size}…"
-                                val translated = translator.translate(updated[index].text)
+                                appendDiagnostic("[UI] Region ${index + 1}/${updated.size}: translate dimulai")
+                                val translated = translator.translate(
+                                    text = updated[index].text,
+                                    onLog = ::appendDiagnostic,
+                                )
                                 updated[index] = updated[index].copy(
                                     translation = translated,
                                     translationReviewed = false,
@@ -343,9 +362,12 @@ private fun ResultState(
                             }
                         }
                         translationStatus = "Selesai"
+                        appendDiagnostic("[UI] Semua region yang kosong selesai diterjemahkan")
                     } catch (t: Throwable) {
-                        translationError = t.message ?: translator.diagnosticMessage(t)
+                        val detail = translator.diagnosticMessage(t)
+                        translationError = t.message ?: detail
                         translationStatus = "Gagal"
+                        appendDiagnostic("[ERROR] $detail")
                     } finally {
                         translationBusy = false
                     }
@@ -372,7 +394,7 @@ private fun ResultState(
             }
         } else {
             Text(
-                "M3.1.5 worker · Tahap: $translationStatus · Model: $modelStatus",
+                "M3.1.7 diagnostik · Tahap: $translationStatus · Model: $modelStatus",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -383,6 +405,28 @@ private fun ResultState(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+
+        if (diagnosticLog.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("Log diagnostik", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Log ini menunjukkan tahap yang benar-benar selesai. ML Kit tidak menyediakan progress persen download model.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            diagnosticLog.forEach { line ->
+                Text(line, style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(
+                        ClipData.newPlainText("Wuvatel M3.1.7 diagnostic log", diagnosticLog.joinToString("\n")),
+                    )
+                },
+            ) {
+                Text("Salin log")
+            }
         }
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -455,6 +499,9 @@ private fun ResultState(
         }
     }
 }
+
+private fun updatedCount(regions: List<TextRegion>): Int =
+    regions.count { it.translation.isNullOrBlank() }
 
 @Composable
 private fun MangaImageWithBoxes(
