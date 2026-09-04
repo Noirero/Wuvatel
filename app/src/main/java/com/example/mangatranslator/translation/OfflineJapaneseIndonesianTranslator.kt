@@ -7,17 +7,22 @@ import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * M3.1.4 offline-first Japanese -> Indonesian translation.
+ * M3.1.4 offline-first Japanese -> Indonesian translation diagnostics.
  *
- * Use Translator.downloadModelIfNeeded() as the primary path, matching the
- * current ML Kit documentation/sample. RemoteModelManager is only used after
- * success to expose useful diagnostics about models visible to this app.
+ * A small HTTPS probe first proves whether the Wuvatel process itself can reach
+ * the internet. After that, use Translator.downloadModelIfNeeded(), matching
+ * the current official ML Kit translation path. RemoteModelManager is only
+ * used after success to report which translation models are visible locally.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -31,23 +36,58 @@ class OfflineJapaneseIndonesianTranslator {
     private val downloadConditions = DownloadConditions.Builder().build()
 
     suspend fun ensureModel(onStatus: (String) -> Unit = {}): String {
-        onStatus("Meminta model JP + ID lewat ML Kit…")
+        onStatus("Menguji akses internet langsung dari Wuvatel…")
+        val probe = probeInternet()
+
+        onStatus("Internet Wuvatel OK ($probe). Meminta model JP + ID dari ML Kit…")
         try {
             withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
                 translator.downloadModelIfNeeded(downloadConditions).await()
             }
         } catch (t: TimeoutCancellationException) {
             throw IllegalStateException(
-                "ML Kit tidak menyelesaikan permintaan model dalam 5 menit. " +
-                    "Tahap berhenti di downloadModelIfNeeded().",
+                "Internet Wuvatel berhasil ($probe), tetapi ML Kit " +
+                    "downloadModelIfNeeded() masih pending setelah 120 detik. " +
+                    "Ini mengarah ke jalur model ML Kit/layanan Google di perangkat, bukan izin INTERNET Wuvatel.",
                 t,
             )
         } catch (t: Throwable) {
-            throw IllegalStateException(describeFailure("download model", t), t)
+            throw IllegalStateException(
+                "Internet Wuvatel berhasil ($probe), lalu ${describeFailure("download model", t)}",
+                t,
+            )
         }
 
         onStatus("ML Kit melaporkan model siap. Memverifikasi model…")
         return downloadedModelsSummary()
+    }
+
+    private suspend fun probeInternet(): String = withContext(Dispatchers.IO) {
+        try {
+            val connection = (URL(PROBE_URL).openConnection() as HttpURLConnection).apply {
+                connectTimeout = PROBE_TIMEOUT_MS
+                readTimeout = PROBE_TIMEOUT_MS
+                requestMethod = "GET"
+                instanceFollowRedirects = false
+                useCaches = false
+            }
+            try {
+                val code = connection.responseCode
+                if (code !in 200..399) {
+                    throw IllegalStateException("HTTP $code")
+                }
+                "HTTP $code"
+            } finally {
+                connection.disconnect()
+            }
+        } catch (t: Throwable) {
+            val type = t::class.java.simpleName.ifBlank { t::class.java.name }
+            throw IllegalStateException(
+                "Probe internet Wuvatel gagal [$type]: ${t.message ?: "tanpa pesan"}. " +
+                    "Periksa Wi-Fi/data/VPN/DNS lalu coba lagi.",
+                t,
+            )
+        }
     }
 
     private suspend fun downloadedModelsSummary(): String {
@@ -129,7 +169,9 @@ class OfflineJapaneseIndonesianTranslator {
     }
 
     private companion object {
-        const val MODEL_DOWNLOAD_TIMEOUT_MS = 300_000L
+        const val PROBE_URL = "https://www.google.com/generate_204"
+        const val PROBE_TIMEOUT_MS = 8_000
+        const val MODEL_DOWNLOAD_TIMEOUT_MS = 120_000L
         const val MODEL_LIST_TIMEOUT_MS = 5_000L
         const val TRANSLATION_TIMEOUT_MS = 30_000L
     }
