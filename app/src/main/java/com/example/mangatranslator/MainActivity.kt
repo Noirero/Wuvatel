@@ -123,7 +123,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.4", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2.5", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -159,7 +159,7 @@ private fun LoadingState() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator()
-            Text("Memperbesar dan membaca ulang tiap region…")
+            Text("Membandingkan ulang hasil OCR tiap region…")
         }
     }
 }

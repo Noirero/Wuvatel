@@ -17,11 +17,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * M2.4 accuracy pass.
+ * M2.5 conservative region refinement.
  *
- * Geometry/grouping remains owned by [JapaneseOcrEngine]. This class only
- * re-reads the text inside an already accepted region, so a refinement can
- * never move, split, merge, or delete a bounding box.
+ * Geometry/grouping is never changed here. M2.3 remains the baseline and a
+ * region-level OCR result is accepted only when it is sufficiently similar,
+ * conservatively better, and (for vertical text) supported by a second pass.
  */
 class RegionOcrRefiner {
     private val recognizer = TextRecognition.getClient(
@@ -34,7 +34,6 @@ class RegionOcrRefiner {
     ): List<TextRegion> {
         if (regions.isEmpty()) return regions
 
-        // Sequential processing keeps peak memory predictable on phones.
         val output = ArrayList<TextRegion>(regions.size)
         for (region in regions) {
             output += refineRegion(bitmap, region)
@@ -47,16 +46,59 @@ class RegionOcrRefiner {
         region: TextRegion,
     ): TextRegion {
         val baseline = cleanupText(region.text)
+        val vertical = isLikelyVertical(region.boundingBox)
+
+        return try {
+            val candidates = mutableListOf<String>()
+
+            readRegionVariant(
+                source = source,
+                region = region,
+                vertical = vertical,
+                paddingRatio = NORMAL_PADDING_RATIO,
+                contrast = NORMAL_CONTRAST,
+            )?.let(candidates::add)
+
+            if (vertical) {
+                readRegionVariant(
+                    source = source,
+                    region = region,
+                    vertical = true,
+                    paddingRatio = TIGHT_PADDING_RATIO,
+                    contrast = TIGHT_CONTRAST,
+                )?.let(candidates::add)
+            }
+
+            region.copy(
+                text = chooseConservativeText(
+                    baseline = baseline,
+                    rawCandidates = candidates,
+                    vertical = vertical,
+                ),
+            )
+        } catch (_: Throwable) {
+            region.copy(text = baseline)
+        }
+    }
+
+    private suspend fun readRegionVariant(
+        source: Bitmap,
+        region: TextRegion,
+        vertical: Boolean,
+        paddingRatio: Float,
+        contrast: Float,
+    ): String? {
         val cropRect = paddedRect(
             box = region.boundingBox,
             imageWidth = source.width,
             imageHeight = source.height,
+            paddingRatio = paddingRatio,
         )
 
         if (cropRect.width() < MIN_REGION_SIZE_PX ||
             cropRect.height() < MIN_REGION_SIZE_PX
         ) {
-            return region.copy(text = baseline)
+            return null
         }
 
         var crop: Bitmap? = null
@@ -84,35 +126,20 @@ class RegionOcrRefiner {
                 crop
             }
 
-            enhanced = enhanceForOcr(scaled)
-
+            enhanced = enhanceForOcr(scaled, contrast)
             val result = recognizer.process(
                 InputImage.fromBitmap(enhanced, 0),
             ).await()
 
-            val vertical = isLikelyVertical(region.boundingBox)
-            val refined = cleanupText(
+            cleanupText(
                 textFromRegionResult(
                     result = result,
                     vertical = vertical,
                 ),
-            )
-
-            region.copy(
-                text = chooseBetterText(
-                    baseline = baseline,
-                    refined = refined,
-                ),
-            )
-        } catch (_: Throwable) {
-            // M2.4 is optional refinement. Keep the stable M2.3 result on any
-            // per-region OCR or bitmap failure.
-            region.copy(text = baseline)
+            ).takeIf { it.isNotBlank() }
         } finally {
             enhanced?.recycle()
-            if (scaled !== crop) {
-                scaled?.recycle()
-            }
+            if (scaled !== crop) scaled?.recycle()
             crop?.recycle()
         }
     }
@@ -121,6 +148,7 @@ class RegionOcrRefiner {
         box: Rect,
         imageWidth: Int,
         imageHeight: Int,
+        paddingRatio: Float,
     ): Rect {
         val safe = Rect(
             box.left.coerceIn(0, imageWidth),
@@ -131,11 +159,11 @@ class RegionOcrRefiner {
 
         val padX = max(
             MIN_PADDING_PX,
-            (safe.width().coerceAtLeast(1) * PADDING_RATIO).toInt(),
+            (safe.width().coerceAtLeast(1) * paddingRatio).toInt(),
         )
         val padY = max(
             MIN_PADDING_PX,
-            (safe.height().coerceAtLeast(1) * PADDING_RATIO).toInt(),
+            (safe.height().coerceAtLeast(1) * paddingRatio).toInt(),
         )
 
         return Rect(
@@ -149,34 +177,30 @@ class RegionOcrRefiner {
     private fun scaleForRegion(width: Int, height: Int): Float {
         val longestSide = max(width, height).coerceAtLeast(1)
         val memoryLimitedScale = MAX_REFINED_SIDE.toFloat() / longestSide
-
-        return min(TARGET_SCALE, memoryLimitedScale)
-            .coerceAtLeast(1f)
+        return min(TARGET_SCALE, memoryLimitedScale).coerceAtLeast(1f)
     }
 
-    private fun enhanceForOcr(source: Bitmap): Bitmap {
+    private fun enhanceForOcr(source: Bitmap, contrast: Float): Bitmap {
         val output = Bitmap.createBitmap(
             source.width,
             source.height,
             Bitmap.Config.ARGB_8888,
         )
         val canvas = Canvas(output)
-        val offset = 128f * (1f - REGION_CONTRAST)
-
+        val offset = 128f * (1f - contrast)
         val matrix = ColorMatrix().apply {
             setSaturation(0f)
             postConcat(
                 ColorMatrix(
                     floatArrayOf(
-                        REGION_CONTRAST, 0f, 0f, 0f, offset,
-                        0f, REGION_CONTRAST, 0f, 0f, offset,
-                        0f, 0f, REGION_CONTRAST, 0f, offset,
+                        contrast, 0f, 0f, 0f, offset,
+                        0f, contrast, 0f, 0f, offset,
+                        0f, 0f, contrast, 0f, offset,
                         0f, 0f, 0f, 1f, 0f,
                     ),
                 ),
             )
         }
-
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             colorFilter = ColorMatrixColorFilter(matrix)
         }
@@ -193,16 +217,11 @@ class RegionOcrRefiner {
                 val box = line.boundingBox ?: return@mapNotNull null
                 val value = line.text.trim()
                 if (value.isBlank()) return@mapNotNull null
-                RegionLine(
-                    text = value,
-                    box = Rect(box),
-                )
+                RegionLine(value, Rect(box))
             }
         }
 
-        if (lines.isEmpty()) {
-            return result.text.trim()
-        }
+        if (lines.isEmpty()) return result.text.trim()
 
         val ordered = if (vertical) {
             lines.sortedWith(
@@ -216,62 +235,157 @@ class RegionOcrRefiner {
             )
         }
 
-        val separator = if (vertical) "" else "\n"
-        return ordered.joinToString(separator = separator) { it.text }
+        return ordered.joinToString(separator = if (vertical) "" else "\n") { it.text }
     }
 
-    private fun chooseBetterText(
+    private fun chooseConservativeText(
         baseline: String,
-        refined: String,
+        rawCandidates: List<String>,
+        vertical: Boolean,
     ): String {
-        if (refined.isBlank()) return baseline
-        if (baseline.isBlank()) return refined
-        if (refined == baseline) return baseline
+        val candidates = rawCandidates
+            .map(::cleanupText)
+            .filter { it.isNotBlank() }
+            .distinct()
 
-        val baseLength = visibleLength(baseline)
-        val refinedLength = visibleLength(refined)
-
-        val minLength = max(
-            1,
-            (baseLength * MIN_LENGTH_RATIO).toInt(),
-        )
-        val maxLength = max(
-            baseLength + LENGTH_SLACK,
-            (baseLength * MAX_LENGTH_RATIO).toInt(),
-        )
-        if (refinedLength !in minLength..maxLength) {
-            return baseline
-        }
-
-        val baseJapanese = baseline.count(::isJapaneseScript)
-        val refinedJapanese = refined.count(::isJapaneseScript)
-        if (baseJapanese >= MIN_JAPANESE_FOR_COMPARE &&
-            refinedJapanese < (baseJapanese * MIN_JAPANESE_RATIO).toInt()
-        ) {
-            return baseline
+        if (candidates.isEmpty()) return baseline
+        if (baseline.isBlank()) {
+            return candidates.maxByOrNull(::normalizedQuality) ?: baseline
         }
 
         val baseNoise = noiseCount(baseline)
-        val refinedNoise = noiseCount(refined)
         val baseScore = normalizedQuality(baseline)
-        val refinedScore = normalizedQuality(refined)
+        val baseCompact = compactForCompare(baseline)
 
-        return when {
-            refinedNoise < baseNoise &&
-                refinedScore >= baseScore - NOISE_SCORE_TOLERANCE -> refined
+        val eligible = candidates.filter { candidate ->
+            val candidateCompact = compactForCompare(candidate)
+            val similarity = editSimilarity(baseCompact, candidateCompact)
+            if (similarity < MIN_BASELINE_SIMILARITY) return@filter false
 
-            refinedScore >= baseScore + SCORE_ADVANTAGE -> refined
+            val candidateNoise = noiseCount(candidate)
+            val candidateScore = normalizedQuality(candidate)
+            val baseJapanese = baseline.count(::isJapaneseScript)
+            val candidateJapanese = candidate.count(::isJapaneseScript)
 
-            // A plausible region-level reading is preferred when it remains
-            // equally Japanese, similar in length, and adds no obvious noise.
-            refinedNoise <= baseNoise &&
-                refinedJapanese >= (baseJapanese * TRUST_JAPANESE_RATIO).toInt() &&
-                abs(refinedLength - baseLength) <= TRUST_LENGTH_DELTA &&
-                refinedScore >= baseScore - TRUST_SCORE_TOLERANCE -> refined
+            if (baseJapanese >= MIN_JAPANESE_FOR_COMPARE &&
+                candidateJapanese < (baseJapanese * MIN_JAPANESE_RATIO).toInt()
+            ) {
+                return@filter false
+            }
 
-            else -> baseline
+            if (hasAmbiguousKanjiReplacement(baseline, candidate) &&
+                candidateNoise >= baseNoise
+            ) {
+                return@filter false
+            }
+
+            val lengthDelta = abs(visibleLength(candidate) - visibleLength(baseline))
+            if (lengthDelta > 0 &&
+                candidateNoise >= baseNoise &&
+                candidateScore < baseScore + LENGTH_CHANGE_SCORE_ADVANTAGE
+            ) {
+                return@filter false
+            }
+
+            true
+        }
+
+        if (eligible.isEmpty()) return baseline
+
+        val ranked = eligible.map { candidate ->
+            val consensus = if (vertical) {
+                candidates.count { other ->
+                    editSimilarity(
+                        compactForCompare(candidate),
+                        compactForCompare(other),
+                    ) >= MIN_PASS_CONSENSUS_SIMILARITY
+                }
+            } else {
+                1
+            }
+            CandidateVote(candidate, consensus)
+        }.sortedWith(
+            compareByDescending<CandidateVote> { it.consensus }
+                .thenByDescending { normalizedQuality(it.text) },
+        )
+
+        val best = ranked.first().text
+        val bestConsensus = ranked.first().consensus
+        val similarity = editSimilarity(baseCompact, compactForCompare(best))
+        val bestNoise = noiseCount(best)
+        val bestScore = normalizedQuality(best)
+        val sameLength = visibleLength(best) == visibleLength(baseline)
+
+        if (bestNoise < baseNoise &&
+            similarity >= MIN_NOISE_FIX_SIMILARITY &&
+            bestScore >= baseScore - NOISE_SCORE_TOLERANCE
+        ) {
+            return best
+        }
+
+        if (vertical &&
+            bestConsensus >= REQUIRED_VERTICAL_CONSENSUS &&
+            similarity >= MIN_CONSENSUS_BASELINE_SIMILARITY &&
+            sameLength &&
+            bestScore >= baseScore - CONSENSUS_SCORE_TOLERANCE
+        ) {
+            return best
+        }
+
+        if (!vertical &&
+            sameLength &&
+            similarity >= MIN_SINGLE_PASS_SIMILARITY &&
+            bestScore >= baseScore + SINGLE_PASS_SCORE_ADVANTAGE
+        ) {
+            return best
+        }
+
+        return baseline
+    }
+
+    private fun hasAmbiguousKanjiReplacement(
+        baseline: String,
+        candidate: String,
+    ): Boolean {
+        val first = compactForCompare(baseline)
+        val second = compactForCompare(candidate)
+        if (first.length != second.length) return false
+
+        return first.indices.any { index ->
+            first[index] != second[index] &&
+                isKanji(first[index]) &&
+                isKanji(second[index])
         }
     }
+
+    private fun editSimilarity(first: String, second: String): Float {
+        if (first == second) return 1f
+        if (first.isEmpty() || second.isEmpty()) return 0f
+
+        var previous = IntArray(second.length + 1) { it }
+        var current = IntArray(second.length + 1)
+
+        for (i in first.indices) {
+            current[0] = i + 1
+            for (j in second.indices) {
+                val substitution = previous[j] + if (first[i] == second[j]) 0 else 1
+                current[j + 1] = min(
+                    min(current[j] + 1, previous[j + 1] + 1),
+                    substitution,
+                )
+            }
+            val swap = previous
+            previous = current
+            current = swap
+        }
+
+        val distance = previous[second.length]
+        val longest = max(first.length, second.length).coerceAtLeast(1)
+        return 1f - distance.toFloat() / longest.toFloat()
+    }
+
+    private fun compactForCompare(text: String): String =
+        cleanupText(text).filterNot { it.isWhitespace() }
 
     private fun cleanupText(raw: String): String {
         var text = normalizeFullWidthLatin(
@@ -300,7 +414,7 @@ class RegionOcrRefiner {
             chars.forEachIndexed { index, char ->
                 when {
                     char == '|' || char == '｜' || char == '¦' -> Unit
-                    isIsolatedLowercaseForeignLetter(chars, index) -> Unit
+                    isIsolatedForeignLetter(chars, index) -> Unit
                     char.isWhitespace() && char != '\n' &&
                         removeJapaneseWhitespace(chars, index) -> Unit
                     else -> append(char)
@@ -330,33 +444,22 @@ class RegionOcrRefiner {
             }
         }
 
-    private fun isIsolatedLowercaseForeignLetter(
-        chars: CharArray,
-        index: Int,
-    ): Boolean {
+    private fun isIsolatedForeignLetter(chars: CharArray, index: Int): Boolean {
         val char = chars[index]
-        if (!Character.isLowerCase(char) || !isForeignLetter(char)) {
-            return false
-        }
+        if (!isForeignLetter(char)) return false
 
-        // Keep actual Latin words such as "web" or "vs".
         if (index > 0 && isForeignLetter(chars[index - 1])) return false
         if (index + 1 < chars.size && isForeignLetter(chars[index + 1])) return false
 
         val previous = previousVisible(chars, index)
         val next = nextVisible(chars, index)
-
         return (previous == null || isJapaneseOrPunctuation(previous)) &&
             (next == null || isJapaneseOrPunctuation(next))
     }
 
-    private fun removeJapaneseWhitespace(
-        chars: CharArray,
-        index: Int,
-    ): Boolean {
+    private fun removeJapaneseWhitespace(chars: CharArray, index: Int): Boolean {
         val previous = previousVisible(chars, index)
         val next = nextVisible(chars, index)
-
         return previous?.let(::isJapaneseOrPunctuation) == true &&
             next?.let(::isJapaneseOrPunctuation) == true
     }
@@ -379,14 +482,8 @@ class RegionOcrRefiner {
         return null
     }
 
-    private fun removeUnbalancedPair(
-        text: String,
-        open: Char,
-        close: Char,
-    ): String {
-        if (text.count { it == open } == text.count { it == close }) {
-            return text
-        }
+    private fun removeUnbalancedPair(text: String, open: Char, close: Char): String {
+        if (text.count { it == open } == text.count { it == close }) return text
         return text.filter { it != open && it != close }
     }
 
@@ -396,14 +493,12 @@ class RegionOcrRefiner {
         val kana = text.count(::isKana)
         val foreign = text.count(::isForeignLetter)
         val punctuation = text.count(::isJapanesePunctuation)
-
         val score =
             japanese * 2.5f +
                 kana * 0.35f +
                 punctuation * 0.10f -
                 foreign * 1.75f -
                 noiseCount(text) * 2.0f
-
         return score / visible.toFloat()
     }
 
@@ -421,10 +516,8 @@ class RegionOcrRefiner {
         var count = 0
         chars.forEachIndexed { index, char ->
             when {
-                char == '|' || char == '｜' || char == '¦' || char == '\uFFFD' ->
-                    count++
-                isIsolatedLowercaseForeignLetter(chars, index) ->
-                    count++
+                char == '|' || char == '｜' || char == '¦' || char == '\uFFFD' -> count++
+                isIsolatedForeignLetter(chars, index) -> count++
             }
         }
 
@@ -433,14 +526,12 @@ class RegionOcrRefiner {
         return count
     }
 
-    private fun visibleLength(text: String): Int =
-        text.count { !it.isWhitespace() }
+    private fun visibleLength(text: String): Int = text.count { !it.isWhitespace() }
 
     private fun isLikelyVertical(box: Rect): Boolean =
         box.height() > box.width() * VERTICAL_REGION_RATIO
 
-    private fun isJapaneseScript(char: Char): Boolean =
-        isKana(char) || isKanji(char)
+    private fun isJapaneseScript(char: Char): Boolean = isKana(char) || isKanji(char)
 
     private fun isKana(char: Char): Boolean {
         val code = char.code
@@ -475,28 +566,36 @@ class RegionOcrRefiner {
         val box: Rect,
     )
 
+    private data class CandidateVote(
+        val text: String,
+        val consensus: Int,
+    )
+
     private companion object {
         const val VERTICAL_REGION_RATIO = 1.10f
-
-        const val PADDING_RATIO = 0.08f
-        const val MIN_PADDING_PX = 6
+        const val NORMAL_PADDING_RATIO = 0.08f
+        const val TIGHT_PADDING_RATIO = 0.035f
+        const val MIN_PADDING_PX = 5
         const val MIN_REGION_SIZE_PX = 8
 
-        const val TARGET_SCALE = 2.75f
-        const val MAX_REFINED_SIDE = 1800
-        const val REGION_CONTRAST = 1.48f
+        const val TARGET_SCALE = 2.6f
+        const val MAX_REFINED_SIDE = 1700
+        const val NORMAL_CONTRAST = 1.38f
+        const val TIGHT_CONTRAST = 1.52f
 
-        const val MIN_LENGTH_RATIO = 0.60f
-        const val MAX_LENGTH_RATIO = 1.55f
-        const val LENGTH_SLACK = 6
+        const val MIN_BASELINE_SIMILARITY = 0.68f
+        const val MIN_NOISE_FIX_SIMILARITY = 0.72f
+        const val MIN_CONSENSUS_BASELINE_SIMILARITY = 0.78f
+        const val MIN_SINGLE_PASS_SIMILARITY = 0.86f
+        const val MIN_PASS_CONSENSUS_SIMILARITY = 0.92f
+        const val REQUIRED_VERTICAL_CONSENSUS = 2
+
         const val MIN_JAPANESE_FOR_COMPARE = 4
-        const val MIN_JAPANESE_RATIO = 0.65f
-
-        const val NOISE_SCORE_TOLERANCE = 0.20f
-        const val SCORE_ADVANTAGE = 0.10f
-        const val TRUST_JAPANESE_RATIO = 0.80f
-        const val TRUST_LENGTH_DELTA = 3
-        const val TRUST_SCORE_TOLERANCE = 0.04f
+        const val MIN_JAPANESE_RATIO = 0.75f
+        const val LENGTH_CHANGE_SCORE_ADVANTAGE = 0.10f
+        const val SINGLE_PASS_SCORE_ADVANTAGE = 0.14f
+        const val NOISE_SCORE_TOLERANCE = 0.08f
+        const val CONSENSUS_SCORE_TOLERANCE = 0.03f
 
         const val MIN_JAPANESE_FOR_CLEANUP = 2
         const val JAPANESE_DOMINANCE_RATIO = 0.55f
