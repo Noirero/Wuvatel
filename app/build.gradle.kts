@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.mangatranslator"
         minSdk = 23
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.3.1.9-offline-first"
+        versionCode = 19
+        versionName = "0.3.1.10-translator-cache"
     }
 
     signingConfigs {

@@ -12,20 +12,18 @@ import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * M3.1.9 offline-first model preparation.
+ * M3.1.10 translator-owned preparation.
  *
- * Local model state is checked first. If both JA and ID are already available,
- * Wuvatel skips all network probing and download calls and translates offline.
- * Network access is only used when one or both models are missing.
+ * RemoteModelManager remains diagnostic only. It is no longer allowed to decide
+ * whether Wuvatel must go online, because the real translator path already proved
+ * more reliable on the target device. Translator.downloadModelIfNeeded() is the
+ * single source of truth: cached models are reused without a Wuvatel network probe;
+ * missing models are downloaded by ML Kit when connectivity is available.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -54,92 +52,69 @@ class OfflineJapaneseIndonesianTranslator {
 
         log(
             "START",
-            "Wuvatel M3.1.9 · offline-first · Android ${Build.VERSION.RELEASE} " +
+            "Wuvatel M3.1.10 · translator-owned cache · Android ${Build.VERSION.RELEASE} " +
                 "(SDK ${Build.VERSION.SDK_INT}) · ${Build.MANUFACTURER} ${Build.MODEL}",
         )
 
-        onStatus("Memeriksa model offline yang tersimpan…")
-        val japaneseReadyBefore = isModelDownloaded(
+        onStatus("Memeriksa status model lokal…")
+        val japaneseBefore = isModelDownloadedDiagnostic(
             model = japaneseModel,
             label = "JA",
             threadName = "wuvatel-check-ja",
             log = ::log,
         )
-        val indonesianReadyBefore = isModelDownloaded(
+        val indonesianBefore = isModelDownloadedDiagnostic(
             model = indonesianModel,
             label = "ID",
             threadName = "wuvatel-check-id",
             log = ::log,
         )
-
         log(
-            "MODEL",
-            "Status awal: JA=${if (japaneseReadyBefore) "READY" else "MISSING"}, " +
-                "ID=${if (indonesianReadyBefore) "READY" else "MISSING"}",
+            "MODEL-DIAG",
+            "RemoteModelManager sebelum prepare: JA=${formatDiagnostic(japaneseBefore)}, " +
+                "ID=${formatDiagnostic(indonesianBefore)}. Hasil ini hanya diagnostik.",
         )
 
-        if (japaneseReadyBefore && indonesianReadyBefore) {
-            log(
-                "OFFLINE",
-                "JA + ID sudah tersedia; probe internet dan downloadModelIfNeeded() dilewati",
-            )
-            onStatus("Model lokal siap. Internet tidak diperlukan.")
-        } else {
-            onStatus("Model belum lengkap. Menguji internet untuk download awal…")
-            log("NET", "Memulai probe $PROBE_URL")
-            val probe = try {
-                probeInternet()
-            } catch (t: Throwable) {
-                log("NET-ERROR", diagnosticMessage(t))
-                throw t
-            }
-            log("NET", "Probe berhasil: $probe")
+        onStatus("Menyiapkan model translator…")
+        prepareTranslatorModels(
+            onStatus = onStatus,
+            log = ::log,
+        )
 
-            downloadTranslatorModels(
-                onStatus = onStatus,
-                log = ::log,
-            )
-        }
-
-        onStatus("Memverifikasi model offline…")
-        val japaneseReadyAfter = isModelDownloaded(
+        onStatus("Memverifikasi translator…")
+        val japaneseAfter = isModelDownloadedDiagnostic(
             model = japaneseModel,
             label = "JA-final",
             threadName = "wuvatel-final-ja",
             log = ::log,
         )
-        val indonesianReadyAfter = isModelDownloaded(
+        val indonesianAfter = isModelDownloadedDiagnostic(
             model = indonesianModel,
             label = "ID-final",
             threadName = "wuvatel-final-id",
             log = ::log,
         )
-
         log(
-            "MODEL-FINAL",
-            "Status akhir: JA=${if (japaneseReadyAfter) "READY" else "MISSING"}, " +
-                "ID=${if (indonesianReadyAfter) "READY" else "MISSING"}",
+            "MODEL-DIAG-FINAL",
+            "RemoteModelManager setelah prepare: JA=${formatDiagnostic(japaneseAfter)}, " +
+                "ID=${formatDiagnostic(indonesianAfter)}. Tidak dipakai sebagai gerbang runtime.",
         )
 
-        if (!japaneseReadyAfter || !indonesianReadyAfter) {
-            val message =
-                "Model belum siap: JA=$japaneseReadyAfter, ID=$indonesianReadyAfter"
-            log("VERIFY-ERROR", message)
-            throw IllegalStateException(message)
-        }
-
-        log("READY", "Model Jepang dan Indonesia terverifikasi tersedia untuk offline.")
-        onStatus("Model offline siap. Memulai terjemahan…")
-        return "JA + ID siap offline-first"
+        log(
+            "READY",
+            "Translator.downloadModelIfNeeded() selesai. Translator JP → ID siap digunakan.",
+        )
+        onStatus("Model translator siap. Memulai terjemahan…")
+        return "Translator JP → ID siap"
     }
 
-    private suspend fun isModelDownloaded(
+    private suspend fun isModelDownloadedDiagnostic(
         model: TranslateRemoteModel,
         label: String,
         threadName: String,
         log: (String, String) -> Unit,
-    ): Boolean {
-        log("CHECK-$label", "Memanggil RemoteModelManager.isModelDownloaded()")
+    ): Boolean? {
+        log("CHECK-$label", "Memanggil RemoteModelManager.isModelDownloaded() untuk diagnostik")
         return try {
             val result = withTimeout(MODEL_QUERY_TIMEOUT_MS) {
                 awaitMlKitTaskOffMain(
@@ -150,82 +125,62 @@ class OfflineJapaneseIndonesianTranslator {
             log("CHECK-$label", "Task selesai: isModelDownloaded=$result")
             result
         } catch (t: TimeoutCancellationException) {
-            val message = "isModelDownloaded($label) tidak selesai dalam 20 detik"
-            log("CHECK-$label-TIMEOUT", message)
-            throw IllegalStateException(message, t)
+            log("CHECK-$label-TIMEOUT", "Diagnostik model tidak selesai dalam 20 detik; diabaikan")
+            null
         } catch (t: Throwable) {
-            val message = describeFailure("cek model $label", t)
-            log("CHECK-$label-ERROR", message)
-            throw IllegalStateException(message, t)
+            log("CHECK-$label-ERROR", "Diagnostik diabaikan: ${describeFailure("cek model $label", t)}")
+            null
         }
     }
 
-    private suspend fun downloadTranslatorModels(
+    private suspend fun prepareTranslatorModels(
         onStatus: (String) -> Unit,
         log: (String, String) -> Unit,
     ) {
-        onStatus("Mengunduh model JP → ID untuk penggunaan offline…")
+        onStatus("Menyiapkan model JP → ID dari cache ML Kit…")
         log(
-            "DOWNLOAD-PAIR",
-            "Memakai Translator.downloadModelIfNeeded(); jaringan apa pun diizinkan",
+            "PREPARE",
+            "Memanggil Translator.downloadModelIfNeeded() tanpa probe internet Wuvatel",
         )
 
         try {
             withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
                 awaitMlKitTaskOffMain(
-                    threadName = "wuvatel-translator-model-download",
+                    threadName = "wuvatel-translator-model-prepare",
                     taskFactory = {
                         log(
-                            "DOWNLOAD-PAIR",
-                            "Worker masuk; memanggil Translator.downloadModelIfNeeded()",
+                            "PREPARE",
+                            "Worker masuk; meminta translator memakai cache atau download bila perlu",
                         )
                         val task = translator.downloadModelIfNeeded(downloadConditions)
-                        log(
-                            "DOWNLOAD-PAIR",
-                            "SDK mengembalikan Task; menunggu task selesai",
-                        )
+                        log("PREPARE", "SDK mengembalikan Task; menunggu task selesai")
                         task
                     },
                 )
             }
-            log("DOWNLOAD-PAIR", "Task downloadModelIfNeeded() selesai")
+            log(
+                "PREPARE-DONE",
+                "downloadModelIfNeeded() selesai. Tidak ada probe HTTP dari Wuvatel.",
+            )
         } catch (t: TimeoutCancellationException) {
             val message = "downloadModelIfNeeded() tidak selesai dalam 180 detik"
-            log("DOWNLOAD-PAIR-TIMEOUT", message)
+            log("PREPARE-TIMEOUT", message)
             throw IllegalStateException(message, t)
         } catch (t: Throwable) {
             val message = describeFailure("downloadModelIfNeeded", t)
-            log("DOWNLOAD-PAIR-ERROR", message)
-            throw IllegalStateException(message, t)
-        }
-    }
-
-    private suspend fun probeInternet(): String = withContext(Dispatchers.IO) {
-        try {
-            val connection = (URL(PROBE_URL).openConnection() as HttpURLConnection).apply {
-                connectTimeout = PROBE_TIMEOUT_MS
-                readTimeout = PROBE_TIMEOUT_MS
-                requestMethod = "GET"
-                instanceFollowRedirects = false
-                useCaches = false
-            }
-            try {
-                val code = connection.responseCode
-                if (code !in 200..399) {
-                    throw IllegalStateException("HTTP $code")
-                }
-                "HTTP $code"
-            } finally {
-                connection.disconnect()
-            }
-        } catch (t: Throwable) {
-            val type = t::class.java.simpleName.ifBlank { t::class.java.name }
+            log("PREPARE-ERROR", message)
             throw IllegalStateException(
-                "Probe internet Wuvatel gagal [$type]: ${t.message ?: "tanpa pesan"}. " +
-                    "Model belum tersedia, jadi internet diperlukan untuk download awal.",
+                "$message. Jika perangkat sedang offline dan model benar-benar belum tersimpan, " +
+                    "aktifkan internet sekali untuk menyiapkan model.",
                 t,
             )
         }
+    }
+
+    private fun formatDiagnostic(value: Boolean?): String = when (value) {
+        true -> "READY"
+        false -> "MISSING"
+        null -> "UNKNOWN"
     }
 
     private suspend fun <T> awaitMlKitTaskOffMain(
@@ -349,8 +304,6 @@ class OfflineJapaneseIndonesianTranslator {
 
     private companion object {
         const val TAG = "WuvatelTranslation"
-        const val PROBE_URL = "https://www.google.com/generate_204"
-        const val PROBE_TIMEOUT_MS = 8_000
         const val MODEL_QUERY_TIMEOUT_MS = 20_000L
         const val MODEL_DOWNLOAD_TIMEOUT_MS = 180_000L
         const val TRANSLATION_TIMEOUT_MS = 30_000L

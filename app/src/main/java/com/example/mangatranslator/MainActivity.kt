@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.9", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.10", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -310,8 +310,7 @@ private fun ResultState(
     }
 
     val missingTranslations = regions.count { it.translation.isNullOrBlank() }
-    val internetReady = diagnosticLog.any { it.contains("[NET] Probe berhasil") }
-    val offlineReady = diagnosticLog.any { it.contains("[OFFLINE]") }
+    val prepareReady = diagnosticLog.any { it.contains("[PREPARE-DONE]") }
     val modelsReady = diagnosticLog.any { it.contains("[READY]") }
     val translationFinished = diagnosticLog.any { it.contains("[UI] Semua region yang kosong selesai diterjemahkan") }
 
@@ -344,8 +343,8 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.1.9 · offline-first")
-                    translationStatus = "Memeriksa model offline…"
+                    appendDiagnostic("[UI] Mulai sesi M3.1.10 · translator-owned cache")
+                    translationStatus = "Menyiapkan model translator…"
                     modelStatus = "Belum siap"
                     try {
                         translator.ensureModel(
@@ -418,17 +417,16 @@ private fun ResultState(
         if (diagnosticLog.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text("Status teknis", style = MaterialTheme.typography.titleSmall)
-            when {
-                offlineReady -> Text("Internet: tidak diperlukan", style = MaterialTheme.typography.bodySmall)
-                internetReady -> Text("Internet: OK", style = MaterialTheme.typography.bodySmall)
+            if (prepareReady) {
+                Text("Jaringan: tidak diprobe Wuvatel", style = MaterialTheme.typography.bodySmall)
             }
             if (modelsReady) {
-                Text("Model JP → ID: siap offline", style = MaterialTheme.typography.bodySmall)
+                Text("Model JP → ID: siap", style = MaterialTheme.typography.bodySmall)
             }
             if (translationFinished) {
                 Text("Proses: selesai", style = MaterialTheme.typography.bodySmall)
             }
-            if (!offlineReady && !internetReady && !modelsReady && !translationFinished && translationBusy) {
+            if (!prepareReady && !modelsReady && !translationFinished && translationBusy) {
                 Text("Pemeriksaan sedang berjalan…", style = MaterialTheme.typography.bodySmall)
             }
 
@@ -441,7 +439,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.1.9 diagnostic log",
+                                "Wuvatel M3.1.10 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
