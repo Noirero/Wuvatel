@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val ciSigningStore = providers.environmentVariable("WUVATEL_SIGNING_STORE_FILE").orNull
+
 android {
     namespace = "com.example.mangatranslator"
     compileSdk = 36
@@ -11,8 +13,25 @@ android {
         applicationId = "com.example.mangatranslator"
         minSdk = 23
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.3.1.5-m3.1.5"
+        versionCode = 15
+        versionName = "0.3.1.6-signing"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            if (!ciSigningStore.isNullOrBlank()) {
+                storeFile = file(ciSigningStore)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {
@@ -26,7 +45,6 @@ android {
 }
 
 dependencies {
-    // Compose 1.11 generation: stable and compatible with compileSdk 36.
     val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
     implementation(composeBom)
 
@@ -40,9 +58,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
-    // Bundled Japanese OCR model: available immediately, no first-run model wait.
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
-
-    // M3.1.5: on-device JP -> ID translation; ML Kit calls run off the UI thread.
     implementation("com.google.mlkit:translate:17.0.3")
 }
