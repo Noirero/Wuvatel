@@ -1,4 +1,4 @@
-# M3.2.3 review actions with permanent signing verification
+# M3.2.4 review quality separation with permanent signing verification
 name: Build Debug APK
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Wuvatel M3.2.3 review actions
+    name: Build Wuvatel M3.2.4 review quality separation
     runs-on: ubuntu-latest
 
     steps:
@@ -102,12 +102,12 @@ jobs:
           fi
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.2.3-review-actions-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Wuvatel-M3.2.4-review-quality-separation-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wuvatel-M3.2.3-review-actions-debug.apk
-          path: Wuvatel-M3.2.3-review-actions-debug.apk
+          name: Wuvatel-M3.2.4-review-quality-separation-debug.apk
+          path: Wuvatel-M3.2.4-review-quality-separation-debug.apk
           if-no-files-found: error
           archive: false

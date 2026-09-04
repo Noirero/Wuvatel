@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.3", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.4", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -316,6 +316,10 @@ private fun ResultState(
     val unreviewedTranslations = regions.count {
         !it.translation.isNullOrBlank() && !it.translationReviewed
     }
+    val attentionCount = regions.count { region ->
+        ocrReviewAttentionReason(region) != null ||
+            translationReviewAttentionReason(region) != null
+    }
     val prepareReady = diagnosticLog.any { it.contains("[PREPARE-DONE]") }
     val cacheReady = diagnosticLog.any { it.contains("[CACHE-PROBE-DONE]") || it.contains("[CACHE-PROBE-FINAL-DONE]") }
     val modelsReady = diagnosticLog.any { it.contains("[READY]") }
@@ -337,7 +341,7 @@ private fun ResultState(
 
         Text("Terdeteksi: ${regions.size} kelompok teks")
         Text("OCR belum dicek: ${regions.count { !it.reviewed }}")
-        Text("Perlu perhatian: ${regions.count(::needsReviewAttention)}")
+        Text("Perlu perhatian: $attentionCount")
         Text("Terjemahan belum dicek: $unreviewedTranslations")
         Text(
             "Ketuk teks Jepang untuk memeriksa atau mengedit. Setelah diperbaiki, terjemahkan ulang hanya region itu.",
@@ -358,7 +362,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.3 · review actions")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.4 · review quality separation")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -457,7 +461,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.3 diagnostic log",
+                                "Wuvatel M3.2.4 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -484,7 +488,8 @@ private fun ResultState(
             Text("Belum ada teks yang terdeteksi pada gambar ini.")
         } else {
             regions.forEachIndexed { index, region ->
-                val needsAttention = needsReviewAttention(region)
+                val ocrAttention = ocrReviewAttentionReason(region)
+                val translationAttention = translationReviewAttentionReason(region)
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -503,7 +508,7 @@ private fun ResultState(
                         Text(
                             text = when {
                                 region.reviewed -> "OCR sudah dicek"
-                                needsAttention -> "Perlu cek · hasil perlu perhatian"
+                                ocrAttention != null -> "Perlu cek · $ocrAttention"
                                 else -> "Perlu cek"
                             },
                             style = MaterialTheme.typography.labelSmall,
@@ -553,13 +558,17 @@ private fun ResultState(
                         ) {
                             Text("Indonesia: $translated")
                             Text(
-                                text = if (region.translationReviewed) {
-                                    "Terjemahan sudah diperiksa"
-                                } else {
-                                    "Hasil otomatis · Natural sederhana · ketuk untuk edit"
+                                text = when {
+                                    region.translationReviewed -> "Terjemahan sudah diperiksa"
+                                    translationAttention != null -> "Perlu cek · $translationAttention · ketuk untuk edit"
+                                    else -> "Hasil otomatis · Natural sederhana · ketuk untuk edit"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary,
+                                color = if (!region.translationReviewed && translationAttention != null) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                },
                             )
                         }
 
@@ -594,7 +603,7 @@ private fun ResultState(
                                     translationError = null
                                     diagnosticLog = emptyList()
                                     showFullDiagnosticLog = false
-                                    appendDiagnostic("[UI] M3.2.3 · terjemahkan ulang region ${index + 1}")
+                                    appendDiagnostic("[UI] M3.2.4 · terjemahkan ulang region ${index + 1}")
                                     translationStatus = "Menyiapkan region ${index + 1}…"
                                     try {
                                         translator.ensureModel(
@@ -654,17 +663,29 @@ private fun ResultState(
 private fun updatedCount(regions: List<TextRegion>): Int =
     regions.count { it.translation.isNullOrBlank() }
 
-private fun needsReviewAttention(region: TextRegion): Boolean {
-    if (region.reviewed) return false
+private fun ocrReviewAttentionReason(region: TextRegion): String? {
+    if (region.reviewed) return null
 
     val japanese = region.text.trim()
-    if (japanese.isBlank()) return true
-    if (japanese.any { it == '\uFFFD' || it == '|' || it == '｜' || it == '¦' }) return true
-    if (japanese.count { it == '(' } != japanese.count { it == ')' }) return true
-    if (japanese.count { it == '[' } != japanese.count { it == ']' }) return true
+    if (japanese.isBlank()) return "teks OCR kosong"
+    if (japanese.any { it == '\uFFFD' || it == '|' || it == '｜' || it == '¦' }) {
+        return "karakter OCR mencurigakan"
+    }
+    if (japanese.count { it == '(' } != japanese.count { it == ')' }) {
+        return "kurung (...) tidak seimbang"
+    }
+    if (japanese.count { it == '[' } != japanese.count { it == ']' }) {
+        return "kurung [...] tidak seimbang"
+    }
+    return null
+}
 
+private fun translationReviewAttentionReason(region: TextRegion): String? {
+    if (region.translationReviewed) return null
+
+    val japanese = region.text.trim()
     val translated = region.translation?.trim().orEmpty()
-    if (translated.isBlank()) return false
+    if (translated.isBlank()) return null
 
     val hasKanji = japanese.any { char ->
         char.code in 0x3400..0x4DBF ||
@@ -676,7 +697,13 @@ private fun needsReviewAttention(region: TextRegion): Boolean {
     val containsUnexpectedUppercaseWord =
         Regex("\\b[A-Z]{3,}\\b").containsMatchIn(translated)
 
-    return (hasKanji && looksLikeSingleRomanizedToken) || containsUnexpectedUppercaseWord
+    if (hasKanji && looksLikeSingleRomanizedToken) {
+        return "hasil tampak seperti romanisasi"
+    }
+    if (containsUnexpectedUppercaseWord) {
+        return "huruf kapital tidak wajar"
+    }
+    return null
 }
 
 @Composable
