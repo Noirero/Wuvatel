@@ -132,7 +132,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.4", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.5", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -324,7 +324,7 @@ private fun ResultState(
                 scope.launch {
                     translationBusy = true
                     translationError = null
-                    translationStatus = "Memulai diagnostik M3.1.4…"
+                    translationStatus = "Memulai M3.1.5 worker…"
                     modelStatus = "Belum siap"
                     try {
                         modelStatus = translator.ensureModel { status ->
@@ -372,7 +372,7 @@ private fun ResultState(
             }
         } else {
             Text(
-                "Diagnostik M3.1.4 · Tahap: $translationStatus · Model: $modelStatus",
+                "M3.1.5 worker · Tahap: $translationStatus · Model: $modelStatus",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
