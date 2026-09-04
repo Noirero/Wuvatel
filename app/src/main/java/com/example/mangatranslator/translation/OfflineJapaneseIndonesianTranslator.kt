@@ -12,10 +12,11 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 
 /**
- * M3.1.2 offline-first Japanese -> Indonesian translation.
+ * M3.1.3 offline-first Japanese -> Indonesian translation.
  *
- * Download translation language models explicitly through RemoteModelManager.
- * This avoids an indefinite wait inside Translator.downloadModelIfNeeded().
+ * Request both translation language models directly. Do not call
+ * isModelDownloaded() before the request because that status Task itself can
+ * stall on some devices and prevent the actual download timeout from starting.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -32,74 +33,78 @@ class OfflineJapaneseIndonesianTranslator {
     private val indonesianModel = TranslateRemoteModel.Builder(
         TranslateLanguage.INDONESIAN,
     ).build()
+    private val downloadConditions = DownloadConditions.Builder().build()
 
     suspend fun ensureModel() {
-        try {
-            ensureDownloaded(japaneseModel, "Jepang")
-            ensureDownloaded(indonesianModel, "Indonesia")
-        } catch (t: MlKitException) {
-            throw IllegalStateException(readableMlKitError(t), t)
-        }
+        downloadModel(japaneseModel, "Jepang")
+        downloadModel(indonesianModel, "Indonesia")
     }
 
-    private suspend fun ensureDownloaded(
+    private suspend fun downloadModel(
         model: TranslateRemoteModel,
         label: String,
     ) {
-        if (modelManager.isModelDownloaded(model).await()) return
-
-        val conditions = DownloadConditions.Builder().build()
         try {
             withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
-                modelManager.download(model, conditions).await()
+                // RemoteModelManager.download() is safe to call when a model is
+                // already present; ML Kit resolves the request without needing
+                // a separate pre-flight status check.
+                modelManager.download(model, downloadConditions).await()
             }
         } catch (t: TimeoutCancellationException) {
             throw IllegalStateException(
-                "Download model $label tidak merespons selama 2 menit. " +
+                "Permintaan model $label tidak merespons selama 90 detik. " +
                     "Coba koneksi lain lalu tekan Terjemahkan lagi.",
                 t,
             )
-        }
-
-        if (!modelManager.isModelDownloaded(model).await()) {
-            throw IllegalStateException(
-                "Model $label belum tersedia setelah proses download selesai. " +
-                    "Tekan Terjemahkan lagi.",
-            )
+        } catch (t: MlKitException) {
+            throw IllegalStateException(readableMlKitError(t, label), t)
         }
     }
 
-    suspend fun translate(text: String): String =
-        translator.translate(text).await().trim()
+    suspend fun translate(text: String): String {
+        try {
+            return withTimeout(TRANSLATION_TIMEOUT_MS) {
+                translator.translate(text).await().trim()
+            }
+        } catch (t: TimeoutCancellationException) {
+            throw IllegalStateException(
+                "Model sudah diminta, tetapi proses terjemahan tidak merespons selama 30 detik.",
+                t,
+            )
+        } catch (t: MlKitException) {
+            throw IllegalStateException(readableMlKitError(t, "terjemahan"), t)
+        }
+    }
 
-    private fun readableMlKitError(error: MlKitException): String =
+    private fun readableMlKitError(error: MlKitException, stage: String): String =
         when (error.errorCode) {
             MlKitException.NETWORK_ISSUE ->
-                "Jaringan bermasalah saat mengunduh model ML Kit. " +
+                "Jaringan bermasalah saat menyiapkan $stage. " +
                     "Coba koneksi lain lalu ulangi. (kode ${error.errorCode})"
 
             MlKitException.NOT_ENOUGH_SPACE ->
-                "Penyimpanan perangkat tidak cukup untuk model terjemahan. " +
+                "Penyimpanan perangkat tidak cukup untuk model $stage. " +
                     "Kosongkan ruang lalu ulangi. (kode ${error.errorCode})"
 
             MlKitException.UNAVAILABLE ->
-                "Layanan/model ML Kit sedang tidak tersedia. " +
+                "Layanan/model ML Kit untuk $stage sedang tidak tersedia. " +
                     "Coba lagi beberapa saat. (kode ${error.errorCode})"
 
             MlKitException.UNSUPPORTED ->
-                "Fitur terjemahan ML Kit tidak didukung pada perangkat ini. " +
+                "Fitur ML Kit untuk $stage tidak didukung pada perangkat ini. " +
                     "(kode ${error.errorCode})"
 
             MlKitException.PERMISSION_DENIED ->
-                "ML Kit tidak mendapat izin untuk mengunduh model. " +
+                "ML Kit tidak mendapat izin saat menyiapkan $stage. " +
                     "(kode ${error.errorCode})"
 
             MlKitException.NOT_FOUND ->
-                "Model terjemahan belum ditemukan di perangkat/server. " +
+                "Model $stage tidak ditemukan di perangkat/server. " +
                     "Coba ulangi download. (kode ${error.errorCode})"
 
             else ->
-                "ML Kit gagal menyiapkan model (kode ${error.errorCode}): " +
+                "ML Kit gagal pada tahap $stage (kode ${error.errorCode}): " +
                     (error.message ?: "error tidak diketahui")
         }
 
@@ -108,6 +113,7 @@ class OfflineJapaneseIndonesianTranslator {
     }
 
     private companion object {
-        const val MODEL_DOWNLOAD_TIMEOUT_MS = 120_000L
+        const val MODEL_DOWNLOAD_TIMEOUT_MS = 90_000L
+        const val TRANSLATION_TIMEOUT_MS = 30_000L
     }
 }
