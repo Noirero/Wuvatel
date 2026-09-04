@@ -5,4 +5,5 @@ import android.graphics.Rect
 data class TextRegion(
     val text: String,
     val boundingBox: Rect,
+    val reviewed: Boolean = false,
 )

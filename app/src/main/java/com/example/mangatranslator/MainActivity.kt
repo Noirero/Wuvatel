@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,11 +22,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -123,7 +127,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M2.5", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M2.6", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -173,6 +177,54 @@ private fun ErrorState(message: String) {
 
 @Composable
 private fun ResultState(state: OcrUiState.Ready) {
+    var regions by remember(state.uri, state.regions) {
+        mutableStateOf(state.regions)
+    }
+    var editingIndex by remember(state.uri, state.regions) {
+        mutableStateOf<Int?>(null)
+    }
+    var draftText by remember(state.uri, state.regions) {
+        mutableStateOf("")
+    }
+
+    val currentEditingIndex = editingIndex
+    if (currentEditingIndex != null && currentEditingIndex in regions.indices) {
+        AlertDialog(
+            onDismissRequest = { editingIndex = null },
+            title = { Text("Edit teks Jepang") },
+            text = {
+                OutlinedTextField(
+                    value = draftText,
+                    onValueChange = { draftText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Hasil OCR") },
+                    minLines = 3,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = draftText.trim().isNotBlank(),
+                    onClick = {
+                        val updated = regions.toMutableList()
+                        updated[currentEditingIndex] = updated[currentEditingIndex].copy(
+                            text = draftText.trim(),
+                            reviewed = true,
+                        )
+                        regions = updated
+                        editingIndex = null
+                    },
+                ) {
+                    Text("Simpan")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingIndex = null }) {
+                    Text("Batal")
+                }
+            },
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -181,20 +233,48 @@ private fun ResultState(state: OcrUiState.Ready) {
     ) {
         MangaImageWithBoxes(
             bitmap = state.bitmap,
-            regions = state.regions,
+            regions = regions,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(420.dp),
         )
 
-        Text("Terdeteksi: ${state.regions.size} kelompok teks")
+        Text("Terdeteksi: ${regions.size} kelompok teks")
+        Text("Belum dicek: ${regions.count { !it.reviewed }}")
+        Text(
+            "Ketuk teks untuk memeriksa atau mengedit sebelum diterjemahkan.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-        if (state.regions.isEmpty()) {
+        if (regions.isEmpty()) {
             Text("Belum ada teks yang terdeteksi pada gambar ini.")
         } else {
-            state.regions.forEachIndexed { index, region ->
-                Text("${index + 1}. ${region.text}")
+            regions.forEachIndexed { index, region ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            editingIndex = index
+                            draftText = region.text
+                        }
+                        .padding(vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text("${index + 1}. ${region.text}")
+                    Text(
+                        text = if (region.reviewed) "Sudah dicek" else "Perlu cek",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (region.reviewed) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+                if (index != regions.lastIndex) {
+                    HorizontalDivider()
+                }
             }
         }
     }
