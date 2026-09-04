@@ -21,12 +21,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * M3.1.7 Japanese -> Indonesian translation diagnostics.
+ * M3.1.8 - ML Kit retry 1/2.
  *
- * Translation models are checked/downloaded explicitly through RemoteModelManager
- * so each stage can be shown in the in-app diagnostic log. ML Kit Tasks are still
- * created and awaited on daemon worker threads to protect the Compose main thread
- * from OEM/SDK synchronous stalls.
+ * This retry uses Translator.downloadModelIfNeeded(), the normal translator-owned
+ * model preparation path. RemoteModelManager is used only to inspect model state
+ * before and after the attempt so the diagnostic log can prove what changed.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -55,8 +54,8 @@ class OfflineJapaneseIndonesianTranslator {
 
         log(
             "START",
-            "Wuvatel M3.1.7 · Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT}) · " +
-                "${Build.MANUFACTURER} ${Build.MODEL}",
+            "Wuvatel M3.1.8 · ML Kit retry 1/2 · Android ${Build.VERSION.RELEASE} " +
+                "(SDK ${Build.VERSION.SDK_INT}) · ${Build.MANUFACTURER} ${Build.MODEL}",
         )
 
         onStatus("Menguji akses internet langsung dari Wuvatel…")
@@ -89,29 +88,16 @@ class OfflineJapaneseIndonesianTranslator {
                 "ID=${if (indonesianReadyBefore) "READY" else "MISSING"}",
         )
 
-        if (!japaneseReadyBefore) {
-            downloadLanguageModel(
-                model = japaneseModel,
-                label = "JA",
-                displayName = "Jepang",
-                threadName = "wuvatel-download-ja",
+        if (!japaneseReadyBefore || !indonesianReadyBefore) {
+            downloadTranslatorModels(
                 onStatus = onStatus,
                 log = ::log,
             )
+        } else {
+            log("DOWNLOAD-SKIP", "Kedua model sudah tersedia; downloadModelIfNeeded() tidak diperlukan")
         }
 
-        if (!indonesianReadyBefore) {
-            downloadLanguageModel(
-                model = indonesianModel,
-                label = "ID",
-                displayName = "Indonesia",
-                threadName = "wuvatel-download-id",
-                onStatus = onStatus,
-                log = ::log,
-            )
-        }
-
-        onStatus("Memverifikasi model setelah download…")
+        onStatus("Memverifikasi model setelah percobaan download…")
         val japaneseReadyAfter = isModelDownloaded(
             model = japaneseModel,
             label = "JA-final",
@@ -125,16 +111,23 @@ class OfflineJapaneseIndonesianTranslator {
             log = ::log,
         )
 
+        log(
+            "MODEL-FINAL",
+            "Status akhir: JA=${if (japaneseReadyAfter) "READY" else "MISSING"}, " +
+                "ID=${if (indonesianReadyAfter) "READY" else "MISSING"}",
+        )
+
         if (!japaneseReadyAfter || !indonesianReadyAfter) {
             val message =
-                "Verifikasi model gagal: JA=$japaneseReadyAfter, ID=$indonesianReadyAfter"
+                "Percobaan ML Kit 1/2 gagal mempersiapkan model: " +
+                    "JA=$japaneseReadyAfter, ID=$indonesianReadyAfter"
             log("VERIFY-ERROR", message)
             throw IllegalStateException(message)
         }
 
         log("READY", "Model Jepang dan Indonesia terverifikasi tersedia.")
         onStatus("Model ML Kit siap. Memulai terjemahan…")
-        return "JA + ID siap via RemoteModelManager"
+        return "JA + ID siap via Translator.downloadModelIfNeeded()"
     }
 
     private suspend fun isModelDownloaded(
@@ -164,45 +157,44 @@ class OfflineJapaneseIndonesianTranslator {
         }
     }
 
-    private suspend fun downloadLanguageModel(
-        model: TranslateRemoteModel,
-        label: String,
-        displayName: String,
-        threadName: String,
+    private suspend fun downloadTranslatorModels(
         onStatus: (String) -> Unit,
         log: (String, String) -> Unit,
     ) {
-        onStatus("Mengunduh model ML Kit $displayName ($label)…")
-        log("DOWNLOAD-$label", "Memanggil RemoteModelManager.download(); jaringan apa pun diizinkan")
+        onStatus("Percobaan ML Kit 1/2: mengunduh model JP → ID…")
+        log(
+            "DOWNLOAD-PAIR",
+            "Memakai Translator.downloadModelIfNeeded(); jaringan apa pun diizinkan",
+        )
 
         try {
             withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
                 awaitMlKitTaskOffMain(
-                    threadName = threadName,
-                    taskFactory = { modelManager.download(model, downloadConditions) },
+                    threadName = "wuvatel-translator-model-download",
+                    taskFactory = {
+                        log(
+                            "DOWNLOAD-PAIR",
+                            "Worker masuk; memanggil Translator.downloadModelIfNeeded()",
+                        )
+                        val task = translator.downloadModelIfNeeded(downloadConditions)
+                        log(
+                            "DOWNLOAD-PAIR",
+                            "SDK mengembalikan Task; menunggu task selesai",
+                        )
+                        task
+                    },
                 )
             }
-            log("DOWNLOAD-$label", "Task download selesai")
+            log("DOWNLOAD-PAIR", "Task downloadModelIfNeeded() selesai")
         } catch (t: TimeoutCancellationException) {
-            val message = "download model $label tidak selesai dalam 180 detik"
-            log("DOWNLOAD-$label-TIMEOUT", message)
+            val message =
+                "Percobaan ML Kit 1/2: downloadModelIfNeeded() tidak selesai dalam 180 detik"
+            log("DOWNLOAD-PAIR-TIMEOUT", message)
             throw IllegalStateException(message, t)
         } catch (t: Throwable) {
-            val message = describeFailure("download model $label", t)
-            log("DOWNLOAD-$label-ERROR", message)
+            val message = describeFailure("Percobaan ML Kit 1/2 downloadModelIfNeeded", t)
+            log("DOWNLOAD-PAIR-ERROR", message)
             throw IllegalStateException(message, t)
-        }
-
-        val verified = isModelDownloaded(
-            model = model,
-            label = "$label-post",
-            threadName = "$threadName-verify",
-            log = log,
-        )
-        if (!verified) {
-            val message = "Task download $label selesai tetapi model masih dilaporkan belum tersedia"
-            log("DOWNLOAD-$label-VERIFY-ERROR", message)
-            throw IllegalStateException(message)
         }
     }
 

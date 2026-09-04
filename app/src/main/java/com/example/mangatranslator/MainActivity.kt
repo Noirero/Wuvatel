@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.7", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.1.8", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -336,7 +336,7 @@ private fun ResultState(
                     translationBusy = true
                     translationError = null
                     diagnosticLog = emptyList()
-                    appendDiagnostic("[UI] Mulai sesi diagnostik M3.1.7")
+                    appendDiagnostic("[UI] Mulai sesi diagnostik M3.1.8 · ML Kit retry 1/2")
                     translationStatus = "Memulai diagnostik model…"
                     modelStatus = "Belum siap"
                     try {
@@ -394,7 +394,7 @@ private fun ResultState(
             }
         } else {
             Text(
-                "M3.1.7 diagnostik · Tahap: $translationStatus · Model: $modelStatus",
+                "M3.1.8 · ML Kit 1/2 · Tahap: $translationStatus · Model: $modelStatus",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -421,7 +421,7 @@ private fun ResultState(
                 onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(
-                        ClipData.newPlainText("Wuvatel M3.1.7 diagnostic log", diagnosticLog.joinToString("\n")),
+                        ClipData.newPlainText("Wuvatel M3.1.8 diagnostic log", diagnosticLog.joinToString("\n")),
                     )
                 },
             ) {
