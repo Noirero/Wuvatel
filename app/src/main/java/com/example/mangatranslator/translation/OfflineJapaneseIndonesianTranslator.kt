@@ -1,28 +1,26 @@
 package com.example.mangatranslator.translation
 
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.MlKitException
 import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.common.model.RemoteModelManager
-import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * M3.1.4 offline-first Japanese -> Indonesian translation diagnostics.
+ * M3.1.5 Japanese -> Indonesian translation.
  *
- * A small HTTPS probe first proves whether the Wuvatel process itself can reach
- * the internet. After that, use Translator.downloadModelIfNeeded(), matching
- * the current official ML Kit translation path. RemoteModelManager is only
- * used after success to report which translation models are visible locally.
+ * The ML Kit call itself is created and awaited on a dedicated daemon worker.
+ * This prevents an OEM/SDK synchronous stall inside downloadModelIfNeeded()
+ * from blocking Compose's main thread and defeating the coroutine timeout.
  */
 class OfflineJapaneseIndonesianTranslator {
     private val translator = Translation.getClient(
@@ -32,23 +30,25 @@ class OfflineJapaneseIndonesianTranslator {
             .build(),
     )
 
-    private val modelManager = RemoteModelManager.getInstance()
     private val downloadConditions = DownloadConditions.Builder().build()
 
     suspend fun ensureModel(onStatus: (String) -> Unit = {}): String {
         onStatus("Menguji akses internet langsung dari Wuvatel…")
         val probe = probeInternet()
 
-        onStatus("Internet Wuvatel OK ($probe). Meminta model JP + ID dari ML Kit…")
+        onStatus("Internet Wuvatel OK ($probe). ML Kit dijalankan di worker terpisah…")
         try {
             withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
-                translator.downloadModelIfNeeded(downloadConditions).await()
+                awaitMlKitTaskOffMain(
+                    threadName = "wuvatel-mlkit-model",
+                    taskFactory = { translator.downloadModelIfNeeded(downloadConditions) },
+                )
             }
         } catch (t: TimeoutCancellationException) {
             throw IllegalStateException(
-                "Internet Wuvatel berhasil ($probe), tetapi ML Kit " +
-                    "downloadModelIfNeeded() masih pending setelah 120 detik. " +
-                    "Ini mengarah ke jalur model ML Kit/layanan Google di perangkat, bukan izin INTERNET Wuvatel.",
+                "Internet Wuvatel berhasil ($probe), tetapi permintaan model ML Kit di worker " +
+                    "masih tidak selesai setelah 120 detik. UI tidak lagi diblokir. " +
+                    "Jika ini terjadi lagi, engine ML Kit akan kita tinggalkan untuk perangkat ini.",
                 t,
             )
         } catch (t: Throwable) {
@@ -58,8 +58,8 @@ class OfflineJapaneseIndonesianTranslator {
             )
         }
 
-        onStatus("ML Kit melaporkan model siap. Memverifikasi model…")
-        return downloadedModelsSummary()
+        onStatus("Model ML Kit siap. Memulai terjemahan…")
+        return "siap oleh downloadModelIfNeeded()"
     }
 
     private suspend fun probeInternet(): String = withContext(Dispatchers.IO) {
@@ -90,27 +90,43 @@ class OfflineJapaneseIndonesianTranslator {
         }
     }
 
-    private suspend fun downloadedModelsSummary(): String {
-        val models = withTimeoutOrNull(MODEL_LIST_TIMEOUT_MS) {
-            modelManager.getDownloadedModels(TranslateRemoteModel::class.java).await()
-        } ?: return "download selesai; daftar model tidak merespons dalam 5 detik"
+    private suspend fun <T> awaitMlKitTaskOffMain(
+        threadName: String,
+        taskFactory: () -> Task<T>,
+    ): T {
+        val result = CompletableDeferred<T>()
 
-        val languages = models.map { it.language }.sorted()
-        return if (languages.isEmpty()) {
-            "download selesai; RemoteModelManager tidak melaporkan model"
-        } else {
-            "tersimpan: ${languages.joinToString(", ")}"
+        Thread(
+            {
+                try {
+                    // Both creating the Task and waiting for it happen away from
+                    // the UI thread. If the SDK blocks synchronously, the outer
+                    // coroutine timeout can still update the UI.
+                    result.complete(Tasks.await(taskFactory()))
+                } catch (t: Throwable) {
+                    result.completeExceptionally(t)
+                }
+            },
+            threadName,
+        ).apply {
+            isDaemon = true
+            start()
         }
+
+        return result.await()
     }
 
     suspend fun translate(text: String): String {
         try {
             return withTimeout(TRANSLATION_TIMEOUT_MS) {
-                translator.translate(text).await().trim()
+                awaitMlKitTaskOffMain(
+                    threadName = "wuvatel-mlkit-translate",
+                    taskFactory = { translator.translate(text) },
+                ).trim()
             }
         } catch (t: TimeoutCancellationException) {
             throw IllegalStateException(
-                "Model dilaporkan siap, tetapi translate() tidak merespons selama 30 detik.",
+                "Model sudah siap, tetapi translate() di worker tidak selesai selama 30 detik.",
                 t,
             )
         } catch (t: Throwable) {
@@ -133,7 +149,7 @@ class OfflineJapaneseIndonesianTranslator {
 
     private fun findMlKitException(error: Throwable): MlKitException? {
         var current: Throwable? = error
-        repeat(6) {
+        repeat(8) {
             if (current is MlKitException) return current
             current = current?.cause
         }
@@ -172,7 +188,6 @@ class OfflineJapaneseIndonesianTranslator {
         const val PROBE_URL = "https://www.google.com/generate_204"
         const val PROBE_TIMEOUT_MS = 8_000
         const val MODEL_DOWNLOAD_TIMEOUT_MS = 120_000L
-        const val MODEL_LIST_TIMEOUT_MS = 5_000L
         const val TRANSLATION_TIMEOUT_MS = 30_000L
     }
 }
