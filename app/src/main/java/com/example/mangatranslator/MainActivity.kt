@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.0", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.1", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -207,6 +207,9 @@ private fun ResultState(
     }
     var translationBusy by remember(state.uri) {
         mutableStateOf(false)
+    }
+    var activeRetranslateIndex by remember(state.uri) {
+        mutableStateOf<Int?>(null)
     }
     var translationError by remember(state.uri) {
         mutableStateOf<String?>(null)
@@ -331,6 +334,7 @@ private fun ResultState(
 
         Text("Terdeteksi: ${regions.size} kelompok teks")
         Text("Belum dicek: ${regions.count { !it.reviewed }}")
+        Text("Perlu perhatian: ${regions.count(::needsReviewAttention)}")
         Text(
             "Ketuk teks Jepang untuk memeriksa atau mengedit sebelum diterjemahkan.",
             style = MaterialTheme.typography.bodySmall,
@@ -346,10 +350,11 @@ private fun ResultState(
             onClick = {
                 scope.launch {
                     translationBusy = true
+                    activeRetranslateIndex = null
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.2.0 · natural sederhana")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.1 · natural sederhana")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -448,7 +453,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.2.0 diagnostic log",
+                                "Wuvatel M3.2.1 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -475,6 +480,7 @@ private fun ResultState(
             Text("Belum ada teks yang terdeteksi pada gambar ini.")
         } else {
             regions.forEachIndexed { index, region ->
+                val needsAttention = needsReviewAttention(region)
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -491,7 +497,11 @@ private fun ResultState(
                     ) {
                         Text("${index + 1}. Jepang: ${region.text}")
                         Text(
-                            text = if (region.reviewed) "Sudah dicek" else "Perlu cek",
+                            text = when {
+                                region.reviewed -> "Sudah dicek"
+                                needsAttention -> "Perlu cek · hasil perlu perhatian"
+                                else -> "Perlu cek"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = if (region.reviewed) {
                                 MaterialTheme.colorScheme.primary
@@ -530,6 +540,65 @@ private fun ResultState(
                             )
                         }
                     }
+
+                    if (region.reviewed) {
+                        TextButton(
+                            enabled = !translationBusy,
+                            onClick = {
+                                scope.launch {
+                                    val sourceText = regions.getOrNull(index)?.text ?: return@launch
+                                    translationBusy = true
+                                    activeRetranslateIndex = index
+                                    translationError = null
+                                    diagnosticLog = emptyList()
+                                    showFullDiagnosticLog = false
+                                    appendDiagnostic("[UI] M3.2.1 · terjemahkan ulang region ${index + 1}")
+                                    translationStatus = "Menyiapkan region ${index + 1}…"
+                                    try {
+                                        translator.ensureModel(
+                                            onStatus = { status -> translationStatus = status },
+                                            onLog = ::appendDiagnostic,
+                                        )
+                                        modelStatus = "Siap"
+                                        translationStatus = "Menerjemahkan ulang region ${index + 1}…"
+                                        val newTranslation = translator.translate(
+                                            text = sourceText,
+                                            onLog = ::appendDiagnostic,
+                                        )
+                                        val updated = regions.toMutableList()
+                                        if (index in updated.indices && updated[index].text == sourceText) {
+                                            updated[index] = updated[index].copy(
+                                                translation = newTranslation,
+                                                translationReviewed = false,
+                                            )
+                                            regions = updated
+                                            translationStatus = "Selesai"
+                                            appendDiagnostic("[UI] Region ${index + 1} selesai diterjemahkan ulang")
+                                        } else {
+                                            translationStatus = "Dibatalkan karena teks berubah"
+                                            appendDiagnostic("[UI] Hasil region ${index + 1} diabaikan karena teks Jepang berubah")
+                                        }
+                                    } catch (t: Throwable) {
+                                        val detail = translator.diagnosticMessage(t)
+                                        translationError = t.message ?: detail
+                                        translationStatus = "Gagal"
+                                        appendDiagnostic("[ERROR] $detail")
+                                    } finally {
+                                        activeRetranslateIndex = null
+                                        translationBusy = false
+                                    }
+                                }
+                            },
+                        ) {
+                            Text(
+                                when {
+                                    activeRetranslateIndex == index -> "Menerjemahkan ulang…"
+                                    translated.isNullOrBlank() -> "Terjemahkan region ini"
+                                    else -> "Terjemahkan ulang region ini"
+                                },
+                            )
+                        }
+                    }
                 }
 
                 if (index != regions.lastIndex) {
@@ -542,6 +611,31 @@ private fun ResultState(
 
 private fun updatedCount(regions: List<TextRegion>): Int =
     regions.count { it.translation.isNullOrBlank() }
+
+private fun needsReviewAttention(region: TextRegion): Boolean {
+    if (region.reviewed) return false
+
+    val japanese = region.text.trim()
+    if (japanese.isBlank()) return true
+    if (japanese.any { it == '\uFFFD' || it == '|' || it == '｜' || it == '¦' }) return true
+    if (japanese.count { it == '(' } != japanese.count { it == ')' }) return true
+    if (japanese.count { it == '[' } != japanese.count { it == ']' }) return true
+
+    val translated = region.translation?.trim().orEmpty()
+    if (translated.isBlank()) return false
+
+    val hasKanji = japanese.any { char ->
+        char.code in 0x3400..0x4DBF ||
+            char.code in 0x4E00..0x9FFF ||
+            char.code in 0xF900..0xFAFF
+    }
+    val looksLikeSingleRomanizedToken =
+        Regex("^[A-Za-z][A-Za-z'’-]{3,}$").matches(translated)
+    val containsUnexpectedUppercaseWord =
+        Regex("\\b[A-Z]{3,}\\b").containsMatchIn(translated)
+
+    return (hasKanji && looksLikeSingleRomanizedToken) || containsUnexpectedUppercaseWord
+}
 
 @Composable
 private fun MangaImageWithBoxes(
