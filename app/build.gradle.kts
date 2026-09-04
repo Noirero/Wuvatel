@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.mangatranslator"
         minSdk = 23
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.3.1.1-m3.1.1"
+        versionCode = 11
+        versionName = "0.3.1.2-m3.1.2"
     }
 
     buildFeatures {
@@ -43,6 +43,6 @@ dependencies {
     // Bundled Japanese OCR model: available immediately, no first-run model wait.
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
 
-    // M3.1.1: on-device JP -> ID translation after one-time model download.
+    // M3.1.2: on-device JP -> ID translation after explicit one-time model downloads.
     implementation("com.google.mlkit:translate:17.0.3")
 }
