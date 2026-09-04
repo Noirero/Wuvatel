@@ -135,7 +135,7 @@ private fun MangaOcrScreen() {
             .fillMaxSize()
             .padding(16.dp),
     ) {
-        Text("Wuvatel · M3.1.11", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · M3.2.0", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
 
         Button(
@@ -335,6 +335,11 @@ private fun ResultState(
             "Ketuk teks Jepang untuk memeriksa atau mengedit sebelum diterjemahkan.",
             style = MaterialTheme.typography.bodySmall,
         )
+        Text(
+            "Gaya: Natural sederhana · offline",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary,
+        )
 
         Button(
             enabled = regions.isNotEmpty() && missingTranslations > 0 && !translationBusy,
@@ -344,7 +349,7 @@ private fun ResultState(
                     translationError = null
                     diagnosticLog = emptyList()
                     showFullDiagnosticLog = false
-                    appendDiagnostic("[UI] Mulai sesi M3.1.11 · direct cache probe")
+                    appendDiagnostic("[UI] Mulai sesi M3.2.0 · natural sederhana")
                     translationStatus = "Menguji cache model lokal…"
                     modelStatus = "Belum siap"
                     try {
@@ -443,7 +448,7 @@ private fun ResultState(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Wuvatel M3.1.11 diagnostic log",
+                                "Wuvatel M3.2.0 diagnostic log",
                                 diagnosticLog.joinToString("\n"),
                             ),
                         )
@@ -518,7 +523,7 @@ private fun ResultState(
                                 text = if (region.translationReviewed) {
                                     "Terjemahan sudah diedit"
                                 } else {
-                                    "Hasil otomatis · ketuk untuk edit"
+                                    "Hasil otomatis · Natural sederhana · ketuk untuk edit"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary,
