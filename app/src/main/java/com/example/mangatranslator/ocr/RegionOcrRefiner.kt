@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.Matrix
 import android.graphics.Rect
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
@@ -69,6 +70,11 @@ class RegionOcrRefiner {
                     vertical = true,
                     paddingRatio = TIGHT_PADDING_RATIO,
                     contrast = TIGHT_CONTRAST,
+                )?.let(candidates::add)
+
+                readRotatedVerticalVariant(
+                    source = source,
+                    region = region,
                 )?.let(candidates::add)
             }
 
@@ -147,8 +153,61 @@ class RegionOcrRefiner {
         }
     }
 
-    private fun paddedRect(
-        box: Rect,
+    private suspend fun readRotatedVerticalVariant(
+        source: Bitmap,
+        region: TextRegion,
+    ): String? {
+        val cropRect = paddedRect(
+            box = region.boundingBox,
+            imageWidth = source.width,
+            imageHeight = source.height,
+            paddingRatio = TIGHT_PADDING_RATIO,
+        )
+        if (cropRect.width() < MIN_REGION_SIZE_PX || cropRect.height() < MIN_REGION_SIZE_PX) {
+            return null
+        }
+
+        var crop: Bitmap? = null
+        var rotated: Bitmap? = null
+        var scaled: Bitmap? = null
+        var enhanced: Bitmap? = null
+        return try {
+            crop = Bitmap.createBitmap(
+                source,
+                cropRect.left,
+                cropRect.top,
+                cropRect.width(),
+                cropRect.height(),
+            )
+            val matrix = Matrix().apply { postRotate(90f) }
+            rotated = Bitmap.createBitmap(crop, 0, 0, crop.width, crop.height, matrix, true)
+
+            val scale = scaleForRegion(rotated.width, rotated.height)
+            scaled = if (scale > 1.01f) {
+                Bitmap.createScaledBitmap(
+                    rotated,
+                    max(1, (rotated.width * scale).toInt()),
+                    max(1, (rotated.height * scale).toInt()),
+                    true,
+                )
+            } else {
+                rotated
+            }
+
+            enhanced = enhanceForOcr(scaled, TIGHT_CONTRAST)
+            val result = recognizer.process(InputImage.fromBitmap(enhanced, 0)).await()
+            cleanupText(result.text)
+                .replace("\n", "")
+                .takeIf { it.isNotBlank() }
+        } finally {
+            enhanced?.recycle()
+            if (scaled !== rotated) scaled?.recycle()
+            rotated?.recycle()
+            crop?.recycle()
+        }
+    }
+
+$marker        box: Rect,
         imageWidth: Int,
         imageHeight: Int,
         paddingRatio: Float,
