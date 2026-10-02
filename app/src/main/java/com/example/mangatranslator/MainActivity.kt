@@ -59,6 +59,7 @@ import com.example.mangatranslator.ocr.JapaneseOcrEngine
 import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
 import com.example.mangatranslator.rendering.TranslatedPageRenderer
+import com.example.mangatranslator.translation.toPageTranslationRequest
 import com.example.mangatranslator.translation.OfflineJapaneseIndonesianTranslator
 import com.example.mangatranslator.translation.MiyorareOnlineJapaneseIndonesianTranslator
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
@@ -491,22 +492,24 @@ private fun ResultState(
                     appendDiagnostic("[UI] Mulai translator Online · Miyorare-style")
                     try {
                         val updated = regions.toMutableList()
-                        for (index in updated.indices) {
-                            if (updated[index].translation.isNullOrBlank()) {
-                                translationStatus = "Online: menerjemahkan ${index + 1}/${updated.size}…"
-                                val translated = withContext(Dispatchers.IO) {
-                                    onlineTranslator.translate(
-                                        text = updated[index].text,
-                                        onLog = ::appendDiagnostic,
-                                    )
-                                }
-                                updated[index] = updated[index].copy(
-                                    translation = translated,
-                                    translationReviewed = false,
-                                )
-                                regions = updated.toList()
-                            }
+                        val pendingIndices = updated.indices.filter { updated[it].translation.isNullOrBlank() }
+                        val requestRegions = pendingIndices.map { updated[it] }.toPageTranslationRequest()
+                        translationStatus = "Online: menerjemahkan 1 halaman (${requestRegions.regions.size} region)…"
+                        val pageResult = withContext(Dispatchers.IO) {
+                            onlineTranslator.translatePage(
+                                request = requestRegions,
+                            )
                         }
+                        pendingIndices.forEachIndexed { requestIndex, regionIndex ->
+                            val id = requestRegions.regions[requestIndex].id
+                            val translated = pageResult.translations[id] ?: return@forEachIndexed
+                            updated[regionIndex] = updated[regionIndex].copy(
+                                translation = translated,
+                                translationReviewed = false,
+                            )
+                        }
+                        regions = updated.toList()
+                        appendDiagnostic("[ONLINE-PAGE] ${pageResult.translations.size} region dipetakan kembali")
                         translationStatus = "Selesai · Online"
                         appendDiagnostic("[UI] Semua region kosong selesai via Online")
                     } catch (t: Throwable) {
