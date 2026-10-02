@@ -60,6 +60,7 @@ import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
 import com.example.mangatranslator.rendering.TranslatedPageRenderer
 import com.example.mangatranslator.translation.OfflineJapaneseIndonesianTranslator
+import com.example.mangatranslator.translation.MiyorareOnlineJapaneseIndonesianTranslator
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -93,6 +94,7 @@ private fun MangaOcrScreen() {
     val ocrEngine = remember { JapaneseOcrEngine() }
     val regionRefiner = remember { RegionOcrRefiner() }
     val translator = remember { OfflineJapaneseIndonesianTranslator() }
+    val onlineTranslator = remember { MiyorareOnlineJapaneseIndonesianTranslator() }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var state by remember { mutableStateOf<OcrUiState>(OcrUiState.Empty) }
 
@@ -156,7 +158,7 @@ private fun MangaOcrScreen() {
             OcrUiState.Empty -> EmptyState()
             OcrUiState.Loading -> LoadingState()
             is OcrUiState.Error -> ErrorState(current.message)
-            is OcrUiState.Ready -> ResultState(current, translator)
+            is OcrUiState.Ready -> ResultState(current, translator, onlineTranslator)
         }
     }
 }
@@ -192,6 +194,7 @@ private fun ErrorState(message: String) {
 private fun ResultState(
     state: OcrUiState.Ready,
     translator: OfflineJapaneseIndonesianTranslator,
+    onlineTranslator: MiyorareOnlineJapaneseIndonesianTranslator,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -412,7 +415,7 @@ private fun ResultState(
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
-            "Gaya: Natural sederhana · offline",
+            "Engine tersedia: ML Kit (offline) · Online Miyorare-style (internet)",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary,
         )
@@ -470,6 +473,59 @@ private fun ResultState(
                     translationBusy -> "Menyiapkan / menerjemahkan…"
                     missingTranslations == 0 -> "Semua sudah diterjemahkan"
                     else -> "Terjemahkan JP → ID ($missingTranslations)"
+                },
+            )
+        }
+
+        Button(
+            enabled = regions.isNotEmpty() && missingTranslations > 0 && !translationBusy,
+            onClick = {
+                scope.launch {
+                    translationBusy = true
+                    activeRetranslateIndex = null
+                    translationError = null
+                    diagnosticLog = emptyList()
+                    showFullDiagnosticLog = false
+                    modelStatus = "Tidak diperlukan"
+                    translationStatus = "Menggunakan translator Online (Miyorare-style)…"
+                    appendDiagnostic("[UI] Mulai translator Online · Miyorare-style")
+                    try {
+                        val updated = regions.toMutableList()
+                        for (index in updated.indices) {
+                            if (updated[index].translation.isNullOrBlank()) {
+                                translationStatus = "Online: menerjemahkan ${index + 1}/${updated.size}…"
+                                val translated = withContext(Dispatchers.IO) {
+                                    onlineTranslator.translate(
+                                        text = updated[index].text,
+                                        onLog = ::appendDiagnostic,
+                                    )
+                                }
+                                updated[index] = updated[index].copy(
+                                    translation = translated,
+                                    translationReviewed = false,
+                                )
+                                regions = updated.toList()
+                            }
+                        }
+                        translationStatus = "Selesai · Online"
+                        appendDiagnostic("[UI] Semua region kosong selesai via Online")
+                    } catch (t: Throwable) {
+                        val detail = onlineTranslator.diagnosticMessage(t)
+                        translationError = detail
+                        translationStatus = "Gagal · Online"
+                        appendDiagnostic("[ONLINE-ERROR] $detail")
+                    } finally {
+                        translationBusy = false
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                when {
+                    translationBusy -> "Translator sedang bekerja…"
+                    missingTranslations == 0 -> "Semua sudah diterjemahkan"
+                    else -> "Terjemahkan Online · Miyorare ($missingTranslations)"
                 },
             )
         }
