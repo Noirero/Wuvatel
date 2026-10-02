@@ -6,6 +6,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,7 +58,9 @@ import androidx.compose.ui.unit.dp
 import com.example.mangatranslator.ocr.JapaneseOcrEngine
 import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
+import com.example.mangatranslator.rendering.TranslatedPageRenderer
 import com.example.mangatranslator.translation.OfflineJapaneseIndonesianTranslator
+import com.example.mangatranslator.translation.MiyorareOnlineJapaneseIndonesianTranslator
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,6 +94,7 @@ private fun MangaOcrScreen() {
     val ocrEngine = remember { JapaneseOcrEngine() }
     val regionRefiner = remember { RegionOcrRefiner() }
     val translator = remember { OfflineJapaneseIndonesianTranslator() }
+    val onlineTranslator = remember { MiyorareOnlineJapaneseIndonesianTranslator() }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var state by remember { mutableStateOf<OcrUiState>(OcrUiState.Empty) }
 
@@ -151,7 +158,7 @@ private fun MangaOcrScreen() {
             OcrUiState.Empty -> EmptyState()
             OcrUiState.Loading -> LoadingState()
             is OcrUiState.Error -> ErrorState(current.message)
-            is OcrUiState.Ready -> ResultState(current, translator)
+            is OcrUiState.Ready -> ResultState(current, translator, onlineTranslator)
         }
     }
 }
@@ -187,9 +194,11 @@ private fun ErrorState(message: String) {
 private fun ResultState(
     state: OcrUiState.Ready,
     translator: OfflineJapaneseIndonesianTranslator,
+    onlineTranslator: MiyorareOnlineJapaneseIndonesianTranslator,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val pageRenderer = remember { TranslatedPageRenderer() }
     var regions by remember(state.uri, state.regions) {
         mutableStateOf(state.regions)
     }
@@ -224,6 +233,9 @@ private fun ResultState(
         mutableStateOf<List<String>>(emptyList())
     }
     var showFullDiagnosticLog by remember(state.uri) {
+        mutableStateOf(false)
+    }
+    var showTranslatedPage by remember(state.uri) {
         mutableStateOf(false)
     }
 
@@ -331,13 +343,68 @@ private fun ResultState(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        MangaImageWithBoxes(
-            bitmap = state.bitmap,
-            regions = regions,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(420.dp),
-        )
+        val translatedPage = remember(state.bitmap, regions) {
+            pageRenderer.render(state.bitmap, regions)
+        }
+        if (showTranslatedPage) {
+            Image(
+                bitmap = translatedPage.asImageBitmap(),
+                contentDescription = "Preview halaman terjemahan",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
+                contentScale = ContentScale.Fit,
+            )
+        } else {
+            MangaImageWithBoxes(
+                bitmap = state.bitmap,
+                regions = regions,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
+            )
+        }
+
+        if (regions.any { !it.translation.isNullOrBlank() }) {
+            Button(
+                onClick = { showTranslatedPage = !showTranslatedPage },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (showTranslatedPage) "Lihat OCR & bounding box" else "Preview hasil di gambar")
+            }
+            Button(
+                onClick = {
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            saveTranslatedPage(context, translatedPage)
+                        }
+                        result.onSuccess { uri ->
+                            Toast.makeText(
+                                context,
+                                "Hasil tersimpan di Pictures/Wuvatel",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            appendDiagnostic("[SAVE] Halaman terjemahan tersimpan: $uri")
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                "Gagal menyimpan: ${error.message ?: "unknown error"}",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            appendDiagnostic("[SAVE-ERROR] ${error.message ?: error::class.java.simpleName}")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Simpan hasil terjemahan")
+            }
+            Text(
+                "Preview M4 memakai background sampling konservatif; file manga asli tidak diubah.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        }
 
         Text("Terdeteksi: ${regions.size} kelompok teks")
         Text("OCR belum dicek: ${regions.count { !it.reviewed }}")
@@ -348,7 +415,7 @@ private fun ResultState(
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
-            "Gaya: Natural sederhana · offline",
+            "Engine tersedia: ML Kit (offline) · Online Miyorare-style (internet)",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary,
         )
@@ -406,6 +473,59 @@ private fun ResultState(
                     translationBusy -> "Menyiapkan / menerjemahkan…"
                     missingTranslations == 0 -> "Semua sudah diterjemahkan"
                     else -> "Terjemahkan JP → ID ($missingTranslations)"
+                },
+            )
+        }
+
+        Button(
+            enabled = regions.isNotEmpty() && missingTranslations > 0 && !translationBusy,
+            onClick = {
+                scope.launch {
+                    translationBusy = true
+                    activeRetranslateIndex = null
+                    translationError = null
+                    diagnosticLog = emptyList()
+                    showFullDiagnosticLog = false
+                    modelStatus = "Tidak diperlukan"
+                    translationStatus = "Menggunakan translator Online (Miyorare-style)…"
+                    appendDiagnostic("[UI] Mulai translator Online · Miyorare-style")
+                    try {
+                        val updated = regions.toMutableList()
+                        for (index in updated.indices) {
+                            if (updated[index].translation.isNullOrBlank()) {
+                                translationStatus = "Online: menerjemahkan ${index + 1}/${updated.size}…"
+                                val translated = withContext(Dispatchers.IO) {
+                                    onlineTranslator.translate(
+                                        text = updated[index].text,
+                                        onLog = ::appendDiagnostic,
+                                    )
+                                }
+                                updated[index] = updated[index].copy(
+                                    translation = translated,
+                                    translationReviewed = false,
+                                )
+                                regions = updated.toList()
+                            }
+                        }
+                        translationStatus = "Selesai · Online"
+                        appendDiagnostic("[UI] Semua region kosong selesai via Online")
+                    } catch (t: Throwable) {
+                        val detail = onlineTranslator.diagnosticMessage(t)
+                        translationError = detail
+                        translationStatus = "Gagal · Online"
+                        appendDiagnostic("[ONLINE-ERROR] $detail")
+                    } finally {
+                        translationBusy = false
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                when {
+                    translationBusy -> "Translator sedang bekerja…"
+                    missingTranslations == 0 -> "Semua sudah diterjemahkan"
+                    else -> "Terjemahkan Online · Miyorare ($missingTranslations)"
                 },
             )
         }
@@ -657,6 +777,37 @@ private fun ResultState(
                 }
             }
         }
+    }
+}
+
+
+private fun saveTranslatedPage(context: Context, bitmap: Bitmap): Result<Uri> = runCatching {
+    val resolver = context.contentResolver
+    val fileName = "Wuvatel-${System.currentTimeMillis()}.png"
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Wuvatel")
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+    }
+
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("MediaStore tidak dapat membuat file")
+
+    try {
+        resolver.openOutputStream(uri)?.use { stream ->
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                "Bitmap gagal dikompresi sebagai PNG"
+            }
+        } ?: error("Output stream tidak tersedia")
+
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        uri
+    } catch (t: Throwable) {
+        resolver.delete(uri, null, null)
+        throw t
     }
 }
 
