@@ -34,27 +34,28 @@ class TranslatedPageRenderer {
             val box = clamp(region.boundingBox, output.width, output.height)
             if (box.width() < MIN_REGION_PX || box.height() < MIN_REGION_PX) return@forEach
 
-            eraseOriginalText(output, canvas, box)
+            eraseOriginalText(source, canvas, box)
             drawTranslation(canvas, box, translation)
         }
 
         return output
     }
 
-    private fun eraseOriginalText(bitmap: Bitmap, canvas: Canvas, box: Rect) {
-        val expanded = expand(box, bitmap.width, bitmap.height)
-        val background = sampleBackground(bitmap, expanded, box)
+    private fun eraseOriginalText(source: Bitmap, canvas: Canvas, box: Rect) {
+        val mask = insetMask(box)
+        val expanded = expand(mask, source.width, source.height)
+        val background = sampleBackground(source, expanded, mask)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = background
             style = Paint.Style.FILL
         }
         canvas.drawRoundRect(
-            box.left.toFloat(),
-            box.top.toFloat(),
-            box.right.toFloat(),
-            box.bottom.toFloat(),
-            min(box.width(), box.height()) * CORNER_RADIUS_RATIO,
-            min(box.width(), box.height()) * CORNER_RADIUS_RATIO,
+            mask.left.toFloat(),
+            mask.top.toFloat(),
+            mask.right.toFloat(),
+            mask.bottom.toFloat(),
+            min(mask.width(), mask.height()) * CORNER_RADIUS_RATIO,
+            min(mask.width(), mask.height()) * CORNER_RADIUS_RATIO,
             paint,
         )
     }
@@ -150,8 +151,23 @@ class TranslatedPageRenderer {
         return Color.rgb((red / count).toInt(), (green / count).toInt(), (blue / count).toInt())
     }
 
-    private fun expand(rect: Rect, width: Int, height: Int): Rect {
-        val padding = max(MIN_SAMPLE_PADDING_PX, (min(rect.width(), rect.height()) * SAMPLE_PADDING_RATIO).toInt())
+    private fun insetMask(box: Rect): Rect {
+        val insetX = min(MAX_MASK_INSET_PX, (box.width() * MASK_INSET_RATIO).toInt())
+        val insetY = min(MAX_MASK_INSET_PX, (box.height() * MASK_INSET_RATIO).toInt())
+        val candidate = Rect(
+            box.left + insetX,
+            box.top + insetY,
+            box.right - insetX,
+            box.bottom - insetY,
+        )
+        return if (candidate.width() >= MIN_REGION_PX && candidate.height() >= MIN_REGION_PX) {
+            candidate
+        } else {
+            Rect(box)
+        }
+    }
+
+$marker        val padding = max(MIN_SAMPLE_PADDING_PX, (min(rect.width(), rect.height()) * SAMPLE_PADDING_RATIO).toInt())
         return Rect(
             max(0, rect.left - padding),
             max(0, rect.top - padding),
@@ -177,6 +193,8 @@ class TranslatedPageRenderer {
         const val TEXT_SIZE_STEP_PX = 2f
         const val LINE_SPACING = 1.08f
         const val CORNER_RADIUS_RATIO = 0.08f
+        const val MASK_INSET_RATIO = 0.04f
+        const val MAX_MASK_INSET_PX = 8
         const val MIN_SAMPLE_PADDING_PX = 8
         const val SAMPLE_PADDING_RATIO = 0.20f
         const val SAMPLE_TARGET = 24
