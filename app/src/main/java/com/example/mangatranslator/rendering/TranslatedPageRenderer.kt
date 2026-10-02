@@ -43,25 +43,6 @@ class TranslatedPageRenderer {
         return output
     }
 
-    private fun eraseOriginalText(source: Bitmap, canvas: Canvas, box: Rect) {
-        val mask = insetMask(box)
-        val expanded = expand(mask, source.width, source.height)
-        val background = sampleBackground(source, expanded, mask)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = background
-            style = Paint.Style.FILL
-        }
-        canvas.drawRoundRect(
-            mask.left.toFloat(),
-            mask.top.toFloat(),
-            mask.right.toFloat(),
-            mask.bottom.toFloat(),
-            min(mask.width(), mask.height()) * CORNER_RADIUS_RATIO,
-            min(mask.width(), mask.height()) * CORNER_RADIUS_RATIO,
-            paint,
-        )
-    }
-
     private fun drawTranslation(canvas: Canvas, box: Rect, text: String) {
         val horizontalPadding = max(MIN_TEXT_PADDING_PX, (box.width() * TEXT_PADDING_RATIO).toInt())
         val verticalPadding = max(MIN_TEXT_PADDING_PX, (box.height() * TEXT_PADDING_RATIO).toInt())
@@ -126,59 +107,6 @@ class TranslatedPageRenderer {
         return lines
     }
 
-    private fun sampleBackground(bitmap: Bitmap, outer: Rect, inner: Rect): Int {
-        var red = 0L
-        var green = 0L
-        var blue = 0L
-        var count = 0L
-        val step = max(1, min(outer.width(), outer.height()) / SAMPLE_TARGET)
-
-        var y = outer.top
-        while (y < outer.bottom) {
-            var x = outer.left
-            while (x < outer.right) {
-                if (!inner.contains(x, y)) {
-                    val pixel = bitmap.getPixel(x, y)
-                    red += Color.red(pixel)
-                    green += Color.green(pixel)
-                    blue += Color.blue(pixel)
-                    count++
-                }
-                x += step
-            }
-            y += step
-        }
-
-        if (count == 0L) return Color.WHITE
-        return Color.rgb((red / count).toInt(), (green / count).toInt(), (blue / count).toInt())
-    }
-
-    private fun insetMask(box: Rect): Rect {
-        val insetX = min(MAX_MASK_INSET_PX, (box.width() * MASK_INSET_RATIO).toInt())
-        val insetY = min(MAX_MASK_INSET_PX, (box.height() * MASK_INSET_RATIO).toInt())
-        val candidate = Rect(
-            box.left + insetX,
-            box.top + insetY,
-            box.right - insetX,
-            box.bottom - insetY,
-        )
-        return if (candidate.width() >= MIN_REGION_PX && candidate.height() >= MIN_REGION_PX) {
-            candidate
-        } else {
-            Rect(box)
-        }
-    }
-
-    private fun expand(rect: Rect, width: Int, height: Int): Rect {
-        val padding = max(MIN_SAMPLE_PADDING_PX, (min(rect.width(), rect.height()) * SAMPLE_PADDING_RATIO).toInt())
-        return Rect(
-            max(0, rect.left - padding),
-            max(0, rect.top - padding),
-            min(width, rect.right + padding),
-            min(height, rect.bottom + padding),
-        )
-    }
-
     private fun clamp(rect: Rect, width: Int, height: Int): Rect = Rect(
         rect.left.coerceIn(0, width),
         rect.top.coerceIn(0, height),
@@ -195,11 +123,5 @@ class TranslatedPageRenderer {
         const val MIN_TEXT_SIZE_PX = 10f
         const val TEXT_SIZE_STEP_PX = 2f
         const val LINE_SPACING = 1.08f
-        const val CORNER_RADIUS_RATIO = 0.08f
-        const val MASK_INSET_RATIO = 0.04f
-        const val MAX_MASK_INSET_PX = 8
-        const val MIN_SAMPLE_PADDING_PX = 8
-        const val SAMPLE_PADDING_RATIO = 0.20f
-        const val SAMPLE_TARGET = 24
     }
 }
