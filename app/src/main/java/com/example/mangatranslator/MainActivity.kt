@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.example.mangatranslator.ocr.JapaneseOcrEngine
 import com.example.mangatranslator.ocr.RegionOcrRefiner
 import com.example.mangatranslator.ocr.TextRegion
+import com.example.mangatranslator.rendering.TranslatedPageRenderer
 import com.example.mangatranslator.translation.OfflineJapaneseIndonesianTranslator
 import com.example.mangatranslator.ui.theme.MangaTranslatorTheme
 import kotlinx.coroutines.Dispatchers
@@ -190,6 +191,7 @@ private fun ResultState(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val pageRenderer = remember { TranslatedPageRenderer() }
     var regions by remember(state.uri, state.regions) {
         mutableStateOf(state.regions)
     }
@@ -224,6 +226,9 @@ private fun ResultState(
         mutableStateOf<List<String>>(emptyList())
     }
     var showFullDiagnosticLog by remember(state.uri) {
+        mutableStateOf(false)
+    }
+    var showTranslatedPage by remember(state.uri) {
         mutableStateOf(false)
     }
 
@@ -331,13 +336,41 @@ private fun ResultState(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        MangaImageWithBoxes(
-            bitmap = state.bitmap,
-            regions = regions,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(420.dp),
-        )
+        val translatedPage = remember(state.bitmap, regions) {
+            pageRenderer.render(state.bitmap, regions)
+        }
+        if (showTranslatedPage) {
+            Image(
+                bitmap = translatedPage.asImageBitmap(),
+                contentDescription = "Preview halaman terjemahan",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
+                contentScale = ContentScale.Fit,
+            )
+        } else {
+            MangaImageWithBoxes(
+                bitmap = state.bitmap,
+                regions = regions,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
+            )
+        }
+
+        if (regions.any { !it.translation.isNullOrBlank() }) {
+            Button(
+                onClick = { showTranslatedPage = !showTranslatedPage },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (showTranslatedPage) "Lihat OCR & bounding box" else "Preview hasil di gambar")
+            }
+            Text(
+                "Preview M4 memakai background sampling konservatif; file manga asli tidak diubah.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        }
 
         Text("Terdeteksi: ${regions.size} kelompok teks")
         Text("OCR belum dicek: ${regions.count { !it.reviewed }}")
