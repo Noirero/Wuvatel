@@ -6,6 +6,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -365,6 +369,33 @@ private fun ResultState(
             ) {
                 Text(if (showTranslatedPage) "Lihat OCR & bounding box" else "Preview hasil di gambar")
             }
+            Button(
+                onClick = {
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            saveTranslatedPage(context, translatedPage)
+                        }
+                        result.onSuccess { uri ->
+                            Toast.makeText(
+                                context,
+                                "Hasil tersimpan di Pictures/Wuvatel",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            appendDiagnostic("[SAVE] Halaman terjemahan tersimpan: $uri")
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                "Gagal menyimpan: ${error.message ?: "unknown error"}",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            appendDiagnostic("[SAVE-ERROR] ${error.message ?: error::class.java.simpleName}")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Simpan hasil terjemahan")
+            }
             Text(
                 "Preview M4 memakai background sampling konservatif; file manga asli tidak diubah.",
                 style = MaterialTheme.typography.bodySmall,
@@ -690,6 +721,37 @@ private fun ResultState(
                 }
             }
         }
+    }
+}
+
+
+private fun saveTranslatedPage(context: Context, bitmap: Bitmap): Result<Uri> = runCatching {
+    val resolver = context.contentResolver
+    val fileName = "Wuvatel-${System.currentTimeMillis()}.png"
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Wuvatel")
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+    }
+
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("MediaStore tidak dapat membuat file")
+
+    try {
+        resolver.openOutputStream(uri)?.use { stream ->
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                "Bitmap gagal dikompresi sebagai PNG"
+            }
+        } ?: error("Output stream tidak tersedia")
+
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        uri
+    } catch (t: Throwable) {
+        resolver.delete(uri, null, null)
+        throw t
     }
 }
 
