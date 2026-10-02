@@ -62,6 +62,47 @@ class MiyorareOnlineJapaneseIndonesianTranslator {
         }
     }
 
+    suspend fun translatePage(
+        request: PageTranslationRequest,
+        onLog: (String) -> Unit = {},
+    ): PageTranslationResult {
+        if (request.regions.isEmpty()) return PageTranslationResult(emptyMap())
+
+        val payload = request.regions.joinToString("\\n") { region ->
+            "[[${region.id}]] ${region.japanese}"
+        }
+        val translated = translate(payload, onLog)
+        val parsed = parsePageResult(translated, request)
+        if (parsed.size != request.regions.size) {
+            onLog("[ONLINE-PAGE] Sentinel mapping tidak utuh; fallback per-region")
+            val fallback = linkedMapOf<String, String>()
+            request.regions.forEach { region ->
+                fallback[region.id] = translate(region.japanese, onLog)
+            }
+            return PageTranslationResult(fallback)
+        }
+        onLog("[ONLINE-PAGE] ${parsed.size} region selesai dengan konteks satu halaman")
+        return PageTranslationResult(parsed)
+    }
+
+    private fun parsePageResult(
+        translated: String,
+        request: PageTranslationRequest,
+    ): Map<String, String> {
+        val expected = request.regions.map { it.id }.toSet()
+        val matches = PAGE_SENTINEL.findAll(translated).toList()
+        if (matches.isEmpty()) return emptyMap()
+        val output = linkedMapOf<String, String>()
+        matches.forEachIndexed { index, match ->
+            val id = match.groupValues[1]
+            if (id !in expected) return@forEachIndexed
+            val start = match.range.last + 1
+            val end = matches.getOrNull(index + 1)?.range?.first ?: translated.length
+            val value = translated.substring(start, end).trim()
+            if (value.isNotBlank()) output[id] = value
+        }
+        return output
+    }
     fun diagnosticMessage(error: Throwable): String =
         error.message ?: error::class.java.simpleName
 
@@ -70,5 +111,6 @@ class MiyorareOnlineJapaneseIndonesianTranslator {
         const val USER_AGENT = "Mozilla/5.0 (Android) Wuvatel"
         const val CONNECT_TIMEOUT_MS = 20_000
         const val READ_TIMEOUT_MS = 60_000
+        val PAGE_SENTINEL = Regex("""\\[\\[\\s*(R\\d{2,4})\\s*]]""")
     }
 }
