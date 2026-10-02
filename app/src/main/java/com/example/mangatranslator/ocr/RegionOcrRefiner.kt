@@ -207,7 +207,8 @@ class RegionOcrRefiner {
         }
     }
 
-$marker        box: Rect,
+    private fun paddedRect(
+        box: Rect,
         imageWidth: Int,
         imageHeight: Int,
         paddingRatio: Float,
