@@ -36,7 +36,10 @@ class RegionOcrRefiner {
 
         val output = ArrayList<TextRegion>(regions.size)
         for (region in regions) {
-            output += refineRegion(bitmap, region)
+            val refined = refineRegion(bitmap, region)
+            if (!isLikelyReaderUiNoise(refined, bitmap.width, bitmap.height)) {
+                output += refined
+            }
         }
         return output
     }
@@ -528,9 +531,31 @@ class RegionOcrRefiner {
 
     private fun visibleLength(text: String): Int = text.count { !it.isWhitespace() }
 
-    private fun isLikelyVertical(box: Rect): Boolean =
-        box.height() > box.width() * VERTICAL_REGION_RATIO
+    private fun isLikelyReaderUiNoise(region: TextRegion, imageWidth: Int, imageHeight: Int): Boolean {
+        val text = region.text.replace(Regex("\\s+"), " ").trim()
+        if (text.isBlank()) return true
 
+        val box = region.boundingBox
+        val nearTop = box.centerY() <= imageHeight * TOP_UI_ZONE_RATIO
+        val nearBottom = box.centerY() >= imageHeight * BOTTOM_UI_ZONE_RATIO
+        val japaneseCount = text.count(::isJapaneseScript)
+
+        // Android status-bar fragments such as "81% 13:32". Only suppress them near
+        // the top edge so numeric dialogue inside the manga remains untouched.
+        if (nearTop && japaneseCount == 0 && STATUS_BAR_PATTERN.matches(text)) {
+            return true
+        }
+
+        // Reader chrome captured in screenshots, e.g. "Ch. 1/1 Pg. 5/88 5%".
+        // Require explicit reader labels instead of filtering generic Latin text.
+        if ((nearTop || nearBottom) && japaneseCount == 0 && READER_CHROME_PATTERN.containsMatchIn(text)) {
+            return true
+        }
+
+        return false
+    }
+
+$marker
     private fun isJapaneseScript(char: Char): Boolean = isKana(char) || isKanji(char)
 
     private fun isKana(char: Char): Boolean {
@@ -599,6 +624,17 @@ class RegionOcrRefiner {
 
         const val MIN_JAPANESE_FOR_CLEANUP = 2
         const val JAPANESE_DOMINANCE_RATIO = 0.55f
+        const val TOP_UI_ZONE_RATIO = 0.12f
+        const val BOTTOM_UI_ZONE_RATIO = 0.88f
+
+        val STATUS_BAR_PATTERN = Regex(
+            "^\\d{1,3}%?\\s+\\d{1,2}:\\d{2}(?:\\s+\\d{1,3}%?)?$",
+            RegexOption.IGNORE_CASE,
+        )
+        val READER_CHROME_PATTERN = Regex(
+            "\\b(?:ch(?:apter)?\\.?\\s*\\d|pg\\.?\\s*\\d|page\\s*\\d)\\b",
+            RegexOption.IGNORE_CASE,
+        )
 
         val JAPANESE_PUNCTUATION = setOf(
             '。', '、', '！', '？', '!', '?', '…', '‥', 'ー', '〜', '～',
