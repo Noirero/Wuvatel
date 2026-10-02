@@ -24,17 +24,19 @@ import kotlin.math.min
 class TranslatedPageRenderer {
 
     fun render(source: Bitmap, regions: List<TextRegion>): Bitmap {
-        val output = source.copy(Bitmap.Config.ARGB_8888, true)
+        val translatedRegions = regions.filter { !it.translation.isNullOrBlank() }
+        val mask = GlyphMaskGenerator().generate(source, translatedRegions)
+        val output = LocalGlyphInpainter().reconstruct(source, mask)
+        mask.recycle()
         val canvas = Canvas(output)
 
-        regions.forEach { region ->
+        translatedRegions.forEach { region ->
             val translation = region.translation?.trim().orEmpty()
             if (translation.isBlank()) return@forEach
 
             val box = clamp(region.boundingBox, output.width, output.height)
             if (box.width() < MIN_REGION_PX || box.height() < MIN_REGION_PX) return@forEach
 
-            eraseOriginalText(source, canvas, box)
             drawTranslation(canvas, box, translation)
         }
 
