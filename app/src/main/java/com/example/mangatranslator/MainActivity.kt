@@ -78,14 +78,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class MangaPage(
+    val uri: Uri,
+    val bitmap: Bitmap,
+    val regions: androidx.compose.runtime.MutableState<List<TextRegion>>,
+)
+
 private sealed interface OcrUiState {
     data object Empty : OcrUiState
-    data object Loading : OcrUiState
-    data class Ready(
-        val uri: Uri,
-        val bitmap: Bitmap,
-        val regions: List<TextRegion>,
-    ) : OcrUiState
+    data class Loading(val current: Int, val total: Int) : OcrUiState
+    data class Ready(val pages: List<MangaPage>) : OcrUiState
     data class Error(val message: String) : OcrUiState
 }
 
@@ -96,8 +98,9 @@ private fun MangaOcrScreen() {
     val regionRefiner = remember { RegionOcrRefiner() }
     val translator = remember { OfflineJapaneseIndonesianTranslator() }
     val onlineTranslator = remember { MiyorareOnlineJapaneseIndonesianTranslator() }
-    var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var state by remember { mutableStateOf<OcrUiState>(OcrUiState.Empty) }
+    var pageIndex by remember { mutableStateOf(0) }
 
     DisposableEffect(ocrEngine, regionRefiner, translator) {
         onDispose {
@@ -108,61 +111,88 @@ private fun MangaOcrScreen() {
     }
 
     val picker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        val selected = uris.distinct().take(MAX_BATCH_PAGES)
+        selected.forEach { uri ->
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            selectedUri = uri
+        }
+        if (selected.isNotEmpty()) {
+            selectedUris = selected
+            pageIndex = 0
         }
     }
 
-    LaunchedEffect(selectedUri) {
-        val uri = selectedUri ?: return@LaunchedEffect
-        state = OcrUiState.Loading
-        state = try {
-            val bitmap = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    BitmapFactory.decodeStream(stream)
-                } ?: error("Gambar tidak dapat dibaca")
+    LaunchedEffect(selectedUris) {
+        if (selectedUris.isEmpty()) return@LaunchedEffect
+        val pages = mutableListOf<MangaPage>()
+        try {
+            selectedUris.forEachIndexed { index, uri ->
+                state = OcrUiState.Loading(index + 1, selectedUris.size)
+                val bitmap = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        BitmapFactory.decodeStream(stream)
+                    } ?: error("Gambar tidak dapat dibaca")
+                }
+                val groupedRegions = ocrEngine.recognize(bitmap)
+                val refinedRegions = regionRefiner.refine(bitmap, groupedRegions)
+                pages += MangaPage(uri, bitmap, mutableStateOf(refinedRegions))
             }
-            val groupedRegions = ocrEngine.recognize(bitmap)
-            val refinedRegions = regionRefiner.refine(bitmap, groupedRegions)
-            OcrUiState.Ready(uri, bitmap, refinedRegions)
+            state = OcrUiState.Ready(pages)
         } catch (t: Throwable) {
-            OcrUiState.Error(t.message ?: "OCR gagal")
+            pages.forEach { it.bitmap.recycle() }
+            state = OcrUiState.Error(t.message ?: "OCR gagal")
         }
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
     ) {
-        Text("Wuvatel · M3.2.7", style = MaterialTheme.typography.headlineSmall)
+        Text("Wuvatel · Reconstruction Spike", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
-
         Button(
             onClick = { picker.launch(arrayOf("image/jpeg", "image/png", "image/webp")) },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Pilih 1 halaman manga")
+            Text("Pilih halaman manga (maks. $MAX_BATCH_PAGES)")
         }
-
         Spacer(Modifier.height(12.dp))
 
         when (val current = state) {
             OcrUiState.Empty -> EmptyState()
-            OcrUiState.Loading -> LoadingState()
+            is OcrUiState.Loading -> LoadingState(current.current, current.total)
             is OcrUiState.Error -> ErrorState(current.message)
-            is OcrUiState.Ready -> ResultState(current, translator, onlineTranslator)
+            is OcrUiState.Ready -> {
+                if (current.pages.isNotEmpty()) {
+                    pageIndex = pageIndex.coerceIn(0, current.pages.lastIndex)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            enabled = pageIndex > 0,
+                            onClick = { pageIndex-- },
+                        ) { Text("← Sebelumnya") }
+                        Text("Halaman ${pageIndex + 1}/${current.pages.size}")
+                        TextButton(
+                            enabled = pageIndex < current.pages.lastIndex,
+                            onClick = { pageIndex++ },
+                        ) { Text("Berikutnya →") }
+                    }
+                    ResultState(current.pages[pageIndex], translator, onlineTranslator)
+                }
+            }
         }
     }
 }
+
+private const val MAX_BATCH_PAGES = 50
 
 @Composable
 private fun EmptyState() {
@@ -172,14 +202,14 @@ private fun EmptyState() {
 }
 
 @Composable
-private fun LoadingState() {
+private fun LoadingState(current: Int, total: Int) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator()
-            Text("Membandingkan ulang hasil OCR tiap region…")
+            Text("Memproses halaman $current/$total…")
         }
     }
 }
@@ -193,50 +223,48 @@ private fun ErrorState(message: String) {
 
 @Composable
 private fun ResultState(
-    state: OcrUiState.Ready,
+    page: MangaPage,
     translator: OfflineJapaneseIndonesianTranslator,
     onlineTranslator: MiyorareOnlineJapaneseIndonesianTranslator,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pageRenderer = remember { TranslatedPageRenderer() }
-    var regions by remember(state.uri, state.regions) {
-        mutableStateOf(state.regions)
-    }
-    var editingJapaneseIndex by remember(state.uri, state.regions) {
+    var regions by page.regions
+    var editingJapaneseIndex by remember(page.uri, page.regions.value) {
         mutableStateOf<Int?>(null)
     }
-    var japaneseDraft by remember(state.uri, state.regions) {
+    var japaneseDraft by remember(page.uri, page.regions.value) {
         mutableStateOf("")
     }
-    var editingTranslationIndex by remember(state.uri, state.regions) {
+    var editingTranslationIndex by remember(page.uri, page.regions.value) {
         mutableStateOf<Int?>(null)
     }
-    var translationDraft by remember(state.uri, state.regions) {
+    var translationDraft by remember(page.uri, page.regions.value) {
         mutableStateOf("")
     }
-    var translationBusy by remember(state.uri) {
+    var translationBusy by remember(page.uri) {
         mutableStateOf(false)
     }
-    var activeRetranslateIndex by remember(state.uri) {
+    var activeRetranslateIndex by remember(page.uri) {
         mutableStateOf<Int?>(null)
     }
-    var translationError by remember(state.uri) {
+    var translationError by remember(page.uri) {
         mutableStateOf<String?>(null)
     }
-    var translationStatus by remember(state.uri) {
+    var translationStatus by remember(page.uri) {
         mutableStateOf("Belum dimulai")
     }
-    var modelStatus by remember(state.uri) {
+    var modelStatus by remember(page.uri) {
         mutableStateOf("Belum diverifikasi")
     }
-    var diagnosticLog by remember(state.uri) {
+    var diagnosticLog by remember(page.uri) {
         mutableStateOf<List<String>>(emptyList())
     }
-    var showFullDiagnosticLog by remember(state.uri) {
+    var showFullDiagnosticLog by remember(page.uri) {
         mutableStateOf(false)
     }
-    var showTranslatedPage by remember(state.uri) {
+    var showTranslatedPage by remember(page.uri) {
         mutableStateOf(false)
     }
 
@@ -344,8 +372,8 @@ private fun ResultState(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val translatedPage = remember(state.bitmap, regions) {
-            pageRenderer.render(state.bitmap, regions)
+        val translatedPage = remember(page.bitmap, regions) {
+            pageRenderer.render(page.bitmap, regions)
         }
         if (showTranslatedPage) {
             Image(
@@ -358,7 +386,7 @@ private fun ResultState(
             )
         } else {
             MangaImageWithBoxes(
-                bitmap = state.bitmap,
+                bitmap = page.bitmap,
                 regions = regions,
                 modifier = Modifier
                     .fillMaxWidth()
