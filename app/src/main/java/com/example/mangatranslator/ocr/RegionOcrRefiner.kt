@@ -555,7 +555,9 @@ class RegionOcrRefiner {
         return false
     }
 
-$marker
+    private fun isLikelyVertical(box: Rect): Boolean =
+        box.height() > box.width() * VERTICAL_REGION_RATIO
+
     private fun isJapaneseScript(char: Char): Boolean = isKana(char) || isKanji(char)
 
     private fun isKana(char: Char): Boolean {
