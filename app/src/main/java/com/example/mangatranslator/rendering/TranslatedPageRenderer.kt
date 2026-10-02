@@ -167,7 +167,8 @@ class TranslatedPageRenderer {
         }
     }
 
-$marker        val padding = max(MIN_SAMPLE_PADDING_PX, (min(rect.width(), rect.height()) * SAMPLE_PADDING_RATIO).toInt())
+    private fun expand(rect: Rect, width: Int, height: Int): Rect {
+        val padding = max(MIN_SAMPLE_PADDING_PX, (min(rect.width(), rect.height()) * SAMPLE_PADDING_RATIO).toInt())
         return Rect(
             max(0, rect.left - padding),
             max(0, rect.top - padding),
